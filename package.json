@@ -1,0 +1,24 @@
+{
+  "name": "cpp-to-rust",
+  "version": "1.0.0",
+  "description": "This project demonstrates how to call Rust code from C++.",
+  "main": "index.js",
+  "scripts": {
+    "cpp:run": "cargo build --release && node index.js app.cpp",
+    "cpp:header": "cargo build --release",
+    "rust:test": "cargo test",
+    "build:ios": "rustup target add aarch64-apple-ios && cargo build --target aarch64-apple-ios --release && rustup target add x86_64-apple-ios && cargo build --target x86_64-apple-ios --release",
+    "build:android": "cargo install cargo-ndk && cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 build --release"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DeveloperRejaul/cpp-to-rust.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/DeveloperRejaul/cpp-to-rust/issues"
+  },
+  "homepage": "https://github.com/DeveloperRejaul/cpp-to-rust#readme"
+}
