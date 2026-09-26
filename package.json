@@ -1,6 +1,6 @@
 {
   "name": "@rejaul/react-native-rust",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Generate Rust and native bindings from React Native TurboModule TypeScript interfaces.",
   "engines": {
     "node": ">=18"

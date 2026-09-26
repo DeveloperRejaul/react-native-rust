@@ -11,7 +11,7 @@ permissions:
 jobs:
   verify:
     name: Test package
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -29,14 +29,8 @@ jobs:
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android NDK
-        run: sdkmanager --install "ndk;27.1.12297006"
-
-      - name: Configure Android NDK path
-        run: echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.1.12297006" >> "$GITHUB_ENV"
+      - name: Verify Android NDK
+        run: test -x "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/clang"
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
@@ -53,7 +47,7 @@ jobs:
   publish:
     name: Publish package
     needs: verify
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       id-token: write
