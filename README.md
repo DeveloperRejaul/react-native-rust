@@ -188,7 +188,7 @@ npm pack --dry-run
 npm publish --access public
 ```
 
-Pushing a version tag such as `v1.0.1` runs [`.github/workflows/publish.yml`](.github/workflows/publish.yml), which tests and publishes the matching package version. Configure npm trusted publishing for this repository and workflow before using the action; it publishes with provenance and does not require an `NPM_TOKEN` secret.
+Pushing a version tag such as `v1.0.2` runs [`.github/workflows/publish.yml`](.github/workflows/publish.yml), which tests and publishes the matching package version. Configure npm trusted publishing for this repository and workflow before using the action; it publishes with provenance and does not require an `NPM_TOKEN` secret.
 
 ## Troubleshooting
 
