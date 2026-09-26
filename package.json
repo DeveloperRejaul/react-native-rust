@@ -1,24 +1,35 @@
 {
-  "name": "cpp-to-rust",
+  "name": "@rejaul/react-native-rust",
   "version": "1.0.0",
-  "description": "This project demonstrates how to call Rust code from C++.",
-  "main": "index.js",
+  "description": "Generate Rust and native bindings from React Native TurboModule TypeScript interfaces.",
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin/",
+    "README.md",
+    "LICENSE",
+    "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md"
+  ],
+  "bin": {
+    "react-native-rust": "./bin/react-native-rust.js"
+  },
   "scripts": {
-    "cpp:run": "cargo build --release && node index.js app.cpp",
-    "cpp:header": "cargo build --release",
-    "rust:test": "cargo test",
-    "build:ios": "rustup target add aarch64-apple-ios && cargo build --target aarch64-apple-ios --release && rustup target add x86_64-apple-ios && cargo build --target x86_64-apple-ios --release",
-    "build:android": "cargo install cargo-ndk && cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 build --release"
+    "test": "node --test"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/DeveloperRejaul/cpp-to-rust.git"
+    "url": "git+https://github.com/DeveloperRejaul/react-native-rust.git"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/DeveloperRejaul/cpp-to-rust/issues"
+    "url": "https://github.com/DeveloperRejaul/react-native-rust/issues"
   },
-  "homepage": "https://github.com/DeveloperRejaul/cpp-to-rust#readme"
+  "homepage": "https://github.com/DeveloperRejaul/react-native-rust#readme",
+  "dependencies": {
+    "typescript": "^5.9.3"
+  }
 }

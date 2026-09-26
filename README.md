@@ -1,239 +1,223 @@
-# 🦀 Rust to C++ for React Native
+# @rejaul/react-native-rust
 
-A production-ready boilerplate for calling **Rust functions from C++** and deploying to **React Native** (iOS & Android).
+Generate Rust functions and native bindings from a React Native TurboModule TypeScript `Spec`. Write the API in TypeScript, implement its logic in Rust, and use the generated C ABI and C++ TurboModule bridge to call it from React Native.
 
-## ✨ Features
+The CLI currently targets the **C++ TurboModule** template created by [`create-react-native-library`](https://www.npmjs.com/package/create-react-native-library).
 
-- 🚀 **Simple Workflow** - Write Rust, build instantly
-- 📱 **Cross-Platform** - iOS (device + simulator) & Android support
-- 🔗 **Auto-Generated Headers** - cbindgen handles C bindings
-- ✅ **Built-In Tests** - Rust unit tests included
-- 📦 **Ready for React Native** - Deploy to mobile apps directly
+## Contents
 
-## 📋 Requirements
+- [Requirements](#requirements)
+- [Create a library](#create-a-library)
+- [Add Rust functions](#add-rust-functions)
+- [Build and run](#build-and-run)
+- [Supported types](#supported-types)
+- [Publish](#publish)
+- [Troubleshooting](#troubleshooting)
+- [Contributing](#contributing)
+- [Code of conduct](#code-of-conduct)
+- [Contact](#contact)
+- [License](#license)
 
-- **Rust** (`rustup`)
-- **Node.js** (v14+)
-- **C++ Compiler** (Xcode on macOS)
-- **For Android:** Android NDK + cargo-ndk
+## Requirements
 
-## 🚀 Quick Start
+- Node.js 18 or newer for the CLI. Use a Node.js version supported by `create-react-native-library` when scaffolding a project.
+- Rust stable (`rustup`, `cargo`).
+- Android builds: Android SDK/NDK and `cargo-ndk`.
+- iOS builds: macOS, Xcode command-line tools, and the Rust Apple targets.
 
-### 1. Install Dependencies
+## Create a library
 
-```bash
-# Install Rust (if not already installed)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+Run from the parent folder where you want the library created:
 
-# Install dependencies
-npm install
+```sh
+npx --yes @rejaul/react-native-rust create react-native-awesome-library
 ```
 
-### 2. Run the Example
+The command runs `create-react-native-library`. In its prompts, select a **TurboModule using C++**. The CLI then initializes Rust from the generated TypeScript `Spec` and configures the C ABI, C++ methods, TypeScript wrappers, iOS CocoaPods linkage, Android CMake linkage, npm scripts, and Rust output ignore rules.
 
-```bash
-# Build & run C++ (automatically generates header files)
-npm run cpp:run
+Install the generated project's dependencies:
 
-# Output:
-# 30
+```sh
+cd react-native-awesome-library
+yarn install
 ```
 
-That's it! Your Rust code is running in C++ ✨
+To run the CLI from its source checkout before publishing, use the checkout's path from the desired parent folder:
 
-## 📖 Commands
-
-| Command | Description |
-|---------|-------------|
-| `npm run cpp:run` | **Build + Run** - generates header, builds Rust, runs C++ |
-| `npm run cpp:header` | Build & generate C header file |
-| `npm run rust:test` | Run Rust unit tests |
-| `npm run build:ios` | Build for iOS (device + simulator) |
-| `npm run build:android` | Build for Android (all ABIs) |
-
-## 🏗️ Project Structure
-
-```
-.
-├── src/
-│   └── lib.rs              # Your Rust code here
-├── app.cpp                 # C++ example (calls Rust)
-├── add_rust.h              # Auto-generated C header
-├── build.rs                # Rust build script (generates headers)
-├── Cargo.toml              # Rust configuration
-├── package.json            # npm scripts
-└── index.js                # Node.js runner
+```sh
+node /path/to/rust_to_cpp/bin/react-native-rust.js create react-native-awesome-library
 ```
 
-## 💡 How It Works
+To add Rust support to an existing C++ TurboModule library, install the CLI and initialize it from that library's root:
 
-### 1. Write Rust Code (`src/lib.rs`)
+```sh
+npm install --save-dev @rejaul/react-native-rust
+npx react-native-rust init
+```
+
+`init` refuses unsupported templates and existing `rust/` directories rather than overwriting them.
+
+## Add Rust functions
+
+The TypeScript `Spec` is the API source of truth. For example, declare a method in `src/NativeAwesomeLibrary.ts`:
+
+```ts
+export interface Spec extends TurboModule {
+  multiply(a: number, b: number): number;
+}
+```
+
+Generate Rust and native glue from the library root:
+
+```sh
+yarn rust:generate
+```
+
+The CLI creates a handler in `rust/src/api/multiply.rs`. Add the implementation there:
 
 ```rust
-#[no_mangle]
-pub extern "C" fn add_rust(left: u64, right: u64) -> u64 {
-    left + right
+pub fn multiply(a: f64, b: f64) -> f64 {
+    a * b
 }
 ```
 
-### 2. Use from C++ (`app.cpp`)
+The generated Rust ABI wrapper, C++ TurboModule method, and TypeScript wrapper connect this function to React Native. Do not hand-edit generated C++ or wrapper code. After changing the `Spec`, run `yarn rust:generate` again. Existing Rust function bodies are preserved, and signature mismatches are reported.
 
-```cpp
-#include "add_rust.h"
-#include <iostream>
+Run Rust tests with:
 
-int main() {
-    int result = add_rust(10, 20);  // Calls Rust!
-    std::cout << result << std::endl;  // Output: 30
-    return 0;
-}
+```sh
+yarn rust:test
 ```
 
-### 3. Build & Run
+## Build and run
 
-```bash
-npm run cpp:run
-```
+Run these commands from the library root. Generate TurboModule Codegen output with `yarn prepare` before building the host app.
 
-**That's it!** The header file is auto-generated, Rust is compiled, and C++ runs.
+### Android
 
-## 🔧 For React Native
+Install the Rust Android targets and `cargo-ndk` once:
 
-### 1. Build for Mobile
-
-```bash
-# Build for both iOS & Android
-npm run build:ios
-npm run build:android
-```
-
-### 2. Libraries Generated in `target/`
-
-**iOS:**
-- `target/aarch64-apple-ios/release/librust_to_cpp.dylib` (Device)
-- `target/x86_64-apple-ios/release/librust_to_cpp.dylib` (Simulator)
-
-**Android:**
-- `target/aarch64-linux-android/release/librust_to_cpp.so` (ARM64)
-- `target/armv7-linux-androideabi/release/librust_to_cpp.so` (ARMv7)
-- `target/x86_64-linux-android/release/librust_to_cpp.so` (x86_64)
-
-### 3. Integrate with React Native Module
-
-Copy libraries to your React Native native module and link them in your build configuration.
-
-## 📝 Modifying the Code
-
-### Add a New Rust Function
-
-**Edit `src/lib.rs`:**
-
-```rust
-#[no_mangle]
-pub extern "C" fn add_rust(left: u64, right: u64) -> u64 {
-    left + right
-}
-
-#[no_mangle]
-pub extern "C" fn multiply_rust(left: u64, right: u64) -> u64 {
-    left * right
-}
-```
-
-**Edit `app.cpp`:**
-
-```cpp
-int multiply_result = multiply_rust(5, 6);
-std::cout << multiply_result << std::endl;  // Output: 30
-```
-
-**Run:**
-
-```bash
-npm run cpp:run
-```
-
-Headers are automatically updated! ✨
-
-### Run Rust Tests
-
-```bash
-npm run rust:test
-
-# Output:
-# running 1 test
-# test tests::test_add_rust ... ok
-```
-
-## 🎯 Example Workflow
-
-```bash
-# 1. Modify Rust code
-nano src/lib.rs
-
-# 2. Test locally
-npm run rust:test
-
-# 3. Build & run with C++
-npm run cpp:run
-
-# 4. Ready for mobile? Build for iOS & Android
-npm run build:ios
-npm run build:android
-```
-
-## ⚙️ Configuration
-
-### Cargo.toml
-
-- **`edition = "2021"`** - Latest Rust edition
-- **`crate-type = ["cdylib"]`** - Compiles as shared library
-- **`cbindgen`** - Auto-generates C headers
-
-### build.rs
-
-Automatically runs during build to generate `add_rust.h` from your Rust code.
-
-## 🐛 Troubleshooting
-
-### Error: "cbindgen not found"
-
-Already included! It's installed as a build dependency.
-
-### iOS build fails
-
-```bash
-# Install iOS targets
-rustup target add aarch64-apple-ios x86_64-apple-ios
-
-# Build again
-npm run build:ios
-```
-
-### Android build fails
-
-```bash
-# Install cargo-ndk
+```sh
+rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
 cargo install cargo-ndk
-
-# Build
-npm run build:android
 ```
 
-## 📚 Learn More
+Build the Rust archives and generate native Codegen output:
 
-- [Rust FFI](https://doc.rust-lang.org/nomicon/ffi.html)
-- [cbindgen](https://github.com/estebank/cbindgen)
-- [React Native Native Modules](https://reactnative.dev/docs/native-modules-intro)
+```sh
+yarn rust:build:android
+yarn prepare
+```
 
-## 📄 License
+With an emulator running, start Metro in one terminal and launch Android from another:
 
-ISC
+```sh
+cd example && yarn start --reset-cache
+```
 
-## 🤝 Contributing
+```sh
+cd example && yarn android
+```
 
-Questions or improvements? Open an issue!
+The example command builds only for the connected device's ABI. Rust archives are generated for `arm64-v8a`, `armeabi-v7a`, `x86`, and `x86_64`.
 
----
+### iOS
 
-**Happy coding!** 🚀
+Build the Rust XCFramework and generate native Codegen output:
+
+```sh
+yarn rust:build:ios
+yarn prepare
+```
+
+Install pods for the example app:
+
+```sh
+cd example/ios && pod install
+```
+
+Start Metro in one terminal and launch an iOS simulator from another:
+
+```sh
+cd example && yarn start --reset-cache
+```
+
+```sh
+cd example && yarn ios --simulator "iPhone 17 Pro"
+```
+
+Rust outputs are written under `rust/build/` and included in the generated library's npm package configuration. Build each platform on a machine with its native toolchain.
+
+The example screen in `example/src/App.tsx` exercises the supported scalar, JSON, Promise, and callback signatures.
+
+## Supported types
+
+The generator supports these TypeScript-to-Rust/C++ mappings:
+
+| TypeScript | Rust | C++ |
+| --- | --- | --- |
+| `number` | `f64` | `double` |
+| `boolean` | `bool` | `bool` |
+| `string` | `String` | `jsi::String` |
+| `T[]`, `Array<T>`, `ReadonlyArray<T>` | `serde_json::Value` | `jsi::Array` |
+| `CodegenTypes.UnsafeObject` | `serde_json::Value` | `jsi::Object` |
+| `void` return | `()` | `void` |
+| `Promise<T>` return | `Result<T, String>` | `jsi::Value` |
+| `(args) => void` parameter | `&mut dyn FnMut(args)` | `jsi::Function` |
+
+Arrays and `UnsafeObject` values cross the native boundary as JSON, so their contents must be JSON-safe. Promise results may use supported payload types, but nested Promises are not supported. Callbacks are invoked synchronously during the Rust handler call and may have up to four explicitly typed parameters; they must not be retained or called later. Promise methods cannot accept callbacks.
+
+Typed object structs, optional or rest parameters, destructured parameters, generic methods, and overloads are not supported. Unsupported signatures fail before generated files are changed.
+
+## Publish
+
+Before publishing a generated React Native library, generate its TypeScript/native outputs and build the Rust artifacts for the platforms you intend to ship:
+
+```sh
+yarn prepare
+yarn rust:build:ios
+yarn rust:build:android
+npm pack --dry-run
+```
+
+To validate and publish this CLI package:
+
+```sh
+npm test
+npm pack --dry-run
+npm publish --access public
+```
+
+Pushing a version tag such as `v1.0.1` runs [`.github/workflows/publish.yml`](.github/workflows/publish.yml), which tests and publishes the matching package version. Configure npm trusted publishing for this repository and workflow before using the action; it publishes with provenance and does not require an `NPM_TOKEN` secret.
+
+## Troubleshooting
+
+- `cargo: command not found`: install Rust with `rustup`, then open a new terminal or run `source "$HOME/.cargo/env"`.
+- Android CMake cannot find `android/generated/jni`: run `yarn prepare` from the library root.
+- Android CMake cannot find a Rust `.a` archive: run `yarn rust:build:android` before launching the example.
+- iOS reports a missing Rust XCFramework: run `yarn rust:build:ios`, then `pod install` in `example/ios`.
+- A React Native type is reported as unsupported: check the mappings and signature restrictions in [Supported types](#supported-types).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing, and contribution guidelines. Bug reports, feature requests, and pull requests are welcome. For code changes, run the CLI test suite and package check before submitting:
+
+```sh
+npm test
+npm pack --dry-run
+```
+
+When changing type mappings or generated output, include tests for supported signatures, regeneration behavior, and unsupported signatures.
+
+## Code of conduct
+
+Participation in this project follows the [Code of Conduct](CODE_OF_CONDUCT.md). Please report conduct concerns through the repository's contact options.
+
+## Contact
+
+- Issues and feature requests: [GitHub Issues](https://github.com/DeveloperRejaul/react-native-rust/issues)
+- Repository and maintainer: [DeveloperRejaul/react-native-rust](https://github.com/DeveloperRejaul/react-native-rust)
+
+## License
+
+This project is distributed under the [ISC License](LICENSE).
