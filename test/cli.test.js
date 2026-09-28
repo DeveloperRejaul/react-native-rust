@@ -147,13 +147,18 @@ test('init scaffolds Rust handlers from methods in the TurboModule Spec', () => 
   const directory = createLibrary();
   const result = runCli(directory, 'init');
   assert.equal(result.status, 0, result.stderr);
-  assert.match(fs.readFileSync(path.join(directory, 'rust/Cargo.toml'), 'utf8'), /crate-type = \["staticlib"\]/);
+  const cargoToml = fs.readFileSync(path.join(directory, 'rust/Cargo.toml'), 'utf8');
+  assert.match(cargoToml, /crate-type = \["staticlib", "cdylib"\]/);
+  assert.match(cargoToml, /wasm-bindgen = "0\.2"/);
   assert.match(fs.readFileSync(path.join(directory, 'rust/src/lib.rs'), 'utf8'), /rnrs_multiply/);
+  assert.match(fs.readFileSync(path.join(directory, 'rust/src/lib.rs'), 'utf8'), /#\[cfg\(target_arch = "wasm32"\)\]\nmod wasm;/);
+  assert.match(fs.readFileSync(path.join(directory, 'rust/src/wasm.rs'), 'utf8'), /#\[wasm_bindgen\]\npub fn rnrs_multiply/);
   const manifest = JSON.parse(fs.readFileSync(path.join(directory, 'package.json'), 'utf8'));
   assert.equal(manifest.scripts['rust:test'], 'cargo test --manifest-path rust/Cargo.toml');
   assert.equal(manifest.scripts['rust:generate'], 'react-native-rust generate');
   assert.equal(manifest.scripts['rust:build:ios'], 'react-native-rust build ios');
   assert.equal(manifest.scripts['rust:build:android'], 'react-native-rust build android');
+  assert.equal(manifest.scripts['rust:build:web'], 'react-native-rust build web');
   assert.ok(manifest.files.includes('rust/'));
   assert.match(fs.readFileSync(path.join(directory, 'rust/Cargo.toml'), 'utf8'), /serde_json = "1"/);
   assert.match(fs.readFileSync(path.join(directory, 'rust/src/ffi.rs'), 'utf8'), /pub struct RustBuffer/);
@@ -272,6 +277,14 @@ test('generate preserves string, array, and UnsafeObject return types across bin
   assert.match(cpp, /static_cast<const jsi::Value\*>\(arguments\.data\(\)\)/);
   assert.match(native, /declare namespace CodegenTypes \{ type UnsafeObject = object; \}/);
   assert.match(fallback, /declare namespace CodegenTypes \{ type UnsafeObject = object; \}/);
+  assert.doesNotMatch(fallback, /only supported on native platforms/);
+  assert.match(fallback, /export function initRustWeb\(/);
+  assert.match(fallback, /rnrsWasm\.rnrs_calculate\(/);
+  assert.match(fallback, /return Promise\.resolve\(JSON\.parse\(rnrsResult\)\);/);
+  assert.match(fallback, /rnrsWasm\.rnrs_inspect\(JSON\.stringify\(value\), \(rnrsPayload: string\)/);
+  const wasmModule = fs.readFileSync(path.join(directory, 'rust/src/wasm.rs'), 'utf8');
+  assert.match(wasmModule, /pub fn rnrs_calculate\(value_json: &str\) -> Result<String, JsValue>/);
+  assert.match(wasmModule, /pub fn rnrs_inspect\(value_json: &str, callback: &js_sys::Function\) -> Result<\(\), JsValue>/);
   const callbackPath = path.join(directory, 'rust/src/api/inspect.rs');
   const callbackHandler = fs.readFileSync(callbackPath, 'utf8').replace(
     'pub fn inspect(value: serde_json::Value, callback: &mut dyn FnMut(String, f64)) -> () {',
@@ -319,6 +332,53 @@ test('android build generates the x86 archive required by the Android emulator A
   assert.ok(fs.existsSync(path.join(directory, 'rust/build/android/x86', `lib${crateName}.a`)));
   assert.ok(fs.existsSync(path.join(directory, 'rust/build/android/arm64-v8a', `lib${crateName}.a`)));
   assert.ok(fs.existsSync(path.join(directory, 'rust/build/android/x86_64', `lib${crateName}.a`)));
+});
+
+test('web build compiles a wasm-pack package whose exports produce correct results, including a callback', () => {
+  const directory = createLibrary();
+  const initResult = runCli(directory, 'init');
+  assert.equal(initResult.status, 0, initResult.stderr);
+
+  const specPath = path.join(directory, 'src/NativeRustDemo.ts');
+  const spec = fs.readFileSync(specPath, 'utf8').replace(
+    '  multiply(a: number, b: number): number;',
+    '  multiply(a: number, b: number): number;\n  inspect(value: number, callback: (label: string, score: number) => void): void;',
+  );
+  fs.writeFileSync(specPath, spec);
+  assert.equal(runCli(directory, 'generate').status, 0);
+
+  fs.writeFileSync(path.join(directory, 'rust/src/api/multiply.rs'), 'pub fn multiply(a: f64, b: f64) -> f64 {\n    a * b\n}\n');
+  fs.writeFileSync(
+    path.join(directory, 'rust/src/api/inspect.rs'),
+    'pub fn inspect(value: f64, callback: &mut dyn FnMut(String, f64)) -> () {\n    callback(format!("value-{value}"), value * 2.0);\n}\n',
+  );
+
+  const previousCwd = process.cwd();
+  process.chdir(directory);
+  try {
+    assert.equal(build('web'), undefined);
+  } finally {
+    process.chdir(previousCwd);
+  }
+
+  const crateName = 'react_native_rust_demo';
+  const pkgDir = path.join(directory, 'rust/build/web/pkg');
+  assert.ok(fs.existsSync(path.join(pkgDir, `${crateName}.js`)));
+  assert.ok(fs.existsSync(path.join(pkgDir, `${crateName}_bg.wasm`)));
+
+  // Compile a second, throwaway nodejs-target package (wasm-pack's `web` target relies on
+  // `fetch`, which can't load a `file://` URL under plain Node) so this test can actually
+  // execute the compiled exports rather than only checking that files were produced.
+  const nodeTestResult = spawnSync('wasm-pack', ['build', '--target', 'nodejs', '--out-dir', 'build/node-test'], {
+    cwd: path.join(directory, 'rust'),
+    encoding: 'utf8',
+  });
+  assert.equal(nodeTestResult.status, 0, nodeTestResult.stderr);
+  const wasm = require(path.join(directory, 'rust/build/node-test', `${crateName}.js`));
+  assert.equal(JSON.parse(wasm.rnrs_multiply(JSON.stringify(3), JSON.stringify(7))), 21);
+  const callbackCalls = [];
+  wasm.rnrs_inspect(JSON.stringify(5), (payloadJson) => callbackCalls.push(JSON.parse(payloadJson)));
+  assert.deepEqual(callbackCalls, [['value-5', 10]]);
 });
 
 test('init rejects non-C++ React Native templates without writing files', () => {

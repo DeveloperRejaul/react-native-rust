@@ -10,6 +10,7 @@ import {
   annotateObject,
   calculateAsync,
   greet,
+  initRustWeb,
   inspectWithCallback,
   isPositive,
   multiply,
@@ -32,11 +33,21 @@ function App() {
 
 function AppContent() {
   const safeAreaInsets = useSafeAreaInsets();
-  const profile = { name: 'Ada Lovelace', score: 92, active: true, role: 'engineer' };
-  const values = [1, 2, 3];
+  const [results, setResults] = useState<Record<string, string>>({});
   const [promiseResult, setPromiseResult] = useState('Pending');
   const [callbackResult, setCallbackResult] = useState('Pending');
-  const runAsyncExamples = useCallback(() => {
+  const runAsyncExamples = useCallback(async () => {
+    await initRustWeb();
+    const profile = { name: 'Ada Lovelace', score: 92, active: true, role: 'engineer' };
+    const values = [1, 2, 3];
+    setResults({
+      multiply: String(multiply(6, 7)),
+      boolean: String(isPositive(-3)),
+      string: greet('Ada'),
+      array: JSON.stringify(scaleValues(values)),
+      object: JSON.stringify(annotateObject(profile)),
+    });
+
     setPromiseResult('Running');
     calculateAsync(21)
       .then((value) => setPromiseResult(String(value)))
@@ -53,11 +64,11 @@ function AppContent() {
   }, [runAsyncExamples]);
 
   const rows = [
-    { type: 'NUMBER', call: 'multiply(6, 7)', result: String(multiply(6, 7)) },
-    { type: 'BOOLEAN', call: 'isPositive(-3)', result: String(isPositive(-3)) },
-    { type: 'STRING', call: "greet('Ada')", result: greet('Ada') },
-    { type: 'ARRAY', call: 'scaleValues([1, 2, 3])', result: JSON.stringify(scaleValues(values)) },
-    { type: 'OBJECT', call: 'annotateObject(profile)', result: JSON.stringify(annotateObject(profile)) },
+    { type: 'NUMBER', call: 'multiply(6, 7)', result: results.multiply ?? 'Waiting' },
+    { type: 'BOOLEAN', call: 'isPositive(-3)', result: results.boolean ?? 'Waiting' },
+    { type: 'STRING', call: "greet('Ada')", result: results.string ?? 'Waiting' },
+    { type: 'ARRAY', call: 'scaleValues([1, 2, 3])', result: results.array ?? 'Waiting' },
+    { type: 'OBJECT', call: 'annotateObject(profile)', result: results.object ?? 'Waiting' },
     { type: 'PROMISE', call: 'calculateAsync(21)', result: promiseResult },
     { type: 'CALLBACK', call: 'inspectWithCallback(profile, fn)', result: callbackResult },
   ];

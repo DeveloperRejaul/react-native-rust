@@ -4,7 +4,7 @@
 
 This project is a helping tool for developing Rust libraries that can be used from React Native. Improve the developer workflow for writing Rust APIs, exposing them safely across the native boundary, building for mobile targets, and integrating the results into React Native apps. Keep the tooling approachable and make its supported platforms and generated outputs clear.
 
-The repository is an npm CLI for React Native library authors and app developers. It targets C++ TurboModules: it parses methods in a TypeScript `Spec`, scaffolds Rust handler functions, emits matching C ABI and C++/TypeScript glue, and configures iOS/Android linking. Library mode initializes an existing C++ TurboModule library. App mode (`init --app`) adds a private local TurboModule package to an existing React Native Community CLI app with both Android and iOS projects. The requested type surface is number/f64, boolean/bool, string, JSON-safe arrays and `CodegenTypes.UnsafeObject`, Promise returns over supported payload types, and synchronous callback parameters with supported payload types. Reject typed object structs, nested promises, callbacks retained past the native call, callbacks in Promise methods, and all other unsupported signatures until their ABI and lifecycle are implemented and tested. Do not claim unsupported type mappings or broader React Native integration are complete.
+The repository is an npm CLI for React Native library authors and app developers. It targets C++ TurboModules: it parses methods in a TypeScript `Spec`, scaffolds Rust handler functions, emits matching C ABI and C++/TypeScript glue, and configures iOS/Android linking; it also emits a `wasm-bindgen` bridge and a WASM-backed TypeScript wrapper for `react-native-web`, built separately via `react-native-rust build web`. Library mode initializes an existing C++ TurboModule library. App mode (`init --app`) adds a private local TurboModule package to an existing React Native Community CLI app with both Android and iOS projects (app mode does not currently scaffold a web target). The requested type surface is number/f64, boolean/bool, string, JSON-safe arrays and `CodegenTypes.UnsafeObject`, Promise returns over supported payload types, and synchronous callback parameters with supported payload types. Reject typed object structs, nested promises, callbacks retained past the native call, callbacks in Promise methods, and all other unsupported signatures until their ABI and lifecycle are implemented and tested. Do not claim unsupported type mappings or broader React Native integration are complete.
 
 ## Current Structure
 
@@ -37,6 +37,8 @@ Keep generated claims and examples within these tested mappings:
 
 Promise results may contain supported payload types; nested Promises are unsupported. Callbacks must return `void`, have at most four required explicitly typed parameters, and only run during the handler call. Promise methods cannot accept callbacks. Arrays and `UnsafeObject` values use JSON serialization and therefore must contain JSON-safe values. Typed object structs, optional/rest/destructured parameters, generic methods, and overloads are unsupported and must be rejected before generating files.
 
+The web (`react-native-web`) bridge maps the same supported types onto `wasm-bindgen`: values cross as JSON strings (`serde_json`) exactly as they do for the C ABI, and callback parameters are passed as a `js_sys::Function` invoked synchronously. It reuses the same `rust/src/api/<method>.rs` handlers as native — no separate implementation is written per platform. The generated web module (`src/rust-generated.tsx`, resolved by bundlers that don't understand Metro's `.native.` convention) exports an `initRustWeb()` that must be awaited once before use, since loading a `.wasm` file is asynchronous even though the generated calls are not.
+
 ## Development Guidance
 
 - Follow the existing Rust, C++, and JavaScript conventions, and keep changes focused on the requested developer workflow.
@@ -58,6 +60,6 @@ Run the narrowest relevant checks for the change. Available project commands inc
 - `npm test` for CLI fixture tests (requires Node.js 18+); runs `tsc` type-checking and the esbuild `dist/` build first via `pretest`.
 - `npm run typecheck` (`tsc`, no emit) and `npm run lint` (ESLint over `src/`) for source-only checks.
 - Rust tests run from the generated React Native library using `npm run rust:test` (requires Rust/Cargo).
-- iOS/Android builds run from the generated React Native library using the `react-native-rust build` command (requires the respective platform toolchain).
+- iOS/Android/web builds run from the generated React Native library using the `react-native-rust build` command (requires the respective platform toolchain; web requires `wasm-pack` and the `wasm32-unknown-unknown` Rust target — check both with `react-native-rust doctor web`).
 
 Mention any platform-specific checks that could not be run.

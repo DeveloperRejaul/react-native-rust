@@ -4,6 +4,7 @@ import {
   annotateObject,
   calculateAsync,
   greet,
+  initRustWeb,
   inspectWithCallback,
   isPositive,
   multiply,
@@ -16,7 +17,8 @@ export default function App() {
   const [promiseResult, setPromiseResult] = useState('Waiting');
   const [callbackResult, setCallbackResult] = useState('Waiting');
 
-  const runExamples = useCallback(() => {
+  const runExamples = useCallback(async () => {
+    await initRustWeb();
     const profile = { name: 'Ada Lovelace', score: 92, active: true, role: 'engineer' };
     setResults({
       multiply: String(multiply(3, 7)),

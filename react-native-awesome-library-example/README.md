@@ -1,14 +1,14 @@
 # react-native-awesome-library
 
-A React Native C++ TurboModule library backed by Rust. The TypeScript TurboModule `Spec` is the API contract; Rust implements the logic. [`@rejaul/react-native-rust`](https://www.npmjs.com/package/@rejaul/react-native-rust) generates the C ABI, C++ bridge, and TypeScript wrappers connecting the two. The `example/` app calls every method on both Android and iOS through the generated bridge.
+A React Native C++ TurboModule library backed by Rust. The TypeScript TurboModule `Spec` is the API contract; Rust implements the logic. [`@rejaul/react-native-rust`](https://www.npmjs.com/package/@rejaul/react-native-rust) generates the C ABI, C++ bridge, and TypeScript wrappers connecting the two, plus a `wasm-bindgen` bridge that reuses the same Rust handlers on `react-native-web`. The `example/` app calls every method on Android, iOS, and web through the generated bridge.
 
 ## Screenshots
 
-The `example/` app calling every generated method and rendering its live Rust result, on both platforms:
+The `example/` app calling every generated method and rendering its live Rust result, on all three platforms:
 
-| Android | iOS |
-| --- | --- |
-| ![Android screenshot](../doc/screenshots/android.png) | ![iOS screenshot](../doc/screenshots/ios.png) |
+| Android | iOS | Web |
+| --- | --- | --- |
+| ![Android screenshot](../doc/screenshots/android.png) | ![iOS screenshot](../doc/screenshots/ios.png) | ![Web screenshot](../doc/screenshots/web.png) |
 
 ## Requirements
 
@@ -16,6 +16,7 @@ The `example/` app calling every generated method and rendering its live Rust re
 - Rust (`rustup` and `cargo`)
 - Android Studio with Android SDK, NDK, CMake, and an Android emulator, plus `cargo-ndk` for Android builds
 - macOS with Xcode command-line tools and the Rust Apple targets for iOS builds
+- Web builds: [`wasm-pack`](https://rustwasm.github.io/wasm-pack/) and the `wasm32-unknown-unknown` Rust target (`rustup target add wasm32-unknown-unknown`)
 
 ## Install
 
@@ -84,7 +85,7 @@ The generator creates the C ABI functions, C++ TurboModule methods, and TypeScri
 	yarn rust:generate
 	```
 
-3. Implement its generated function in `rust/src/api/<method-name>.rs`. Regeneration preserves existing Rust function bodies. Unsupported types fail with an error before generated files are changed.
+3. Implement its generated function in `rust/src/api/<method-name>.rs`. Regeneration preserves existing Rust function bodies. Unsupported types fail with an error before generated files are changed. The same handler is reused by the `wasm-bindgen` bridge in `rust/src/wasm.rs`, so no separate implementation is needed for web.
 4. Rebuild TurboModule Codegen and TypeScript output:
 
 	```sh
@@ -157,6 +158,40 @@ In a second terminal, build and launch the iOS simulator app:
 
 ```sh
 yarn ios --simulator "iPhone 17 Pro"
+```
+
+## Run On Web
+
+Build the WebAssembly package once, or again after Rust changes:
+
+```sh
+source "$HOME/.cargo/env"
+yarn rust:build:web
+```
+
+This compiles `rust/` to `rust/build/web/pkg/` with `wasm-pack build --target web`, reusing the same `rust/src/api/<method>.rs` handlers as native.
+
+Start the Vite dev server from `example/`:
+
+```sh
+cd example
+yarn web
+```
+
+Or build a production bundle:
+
+```sh
+cd example
+yarn build:web
+```
+
+The example app awaits the generated `initRustWeb()` once before calling any Rust function, since loading the `.wasm` file is asynchronous even though the generated calls are not:
+
+```tsx
+import { initRustWeb, multiply } from 'react-native-awesome-library';
+
+await initRustWeb();
+multiply(3, 7); // 21
 ```
 
 ## Test

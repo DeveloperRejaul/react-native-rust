@@ -1,7 +1,10 @@
 mod api;
 mod ffi;
+#[cfg(target_arch = "wasm32")]
+mod wasm;
 pub use ffi::{rnrs_buffer_free, RustBuffer, RustCallback, RustSlice};
 
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn rnrs_multiply(a: ffi::RustSlice, b: ffi::RustSlice) -> ffi::RustBuffer {
     ffi::catch_json(|| {
@@ -11,6 +14,7 @@ pub extern "C" fn rnrs_multiply(a: ffi::RustSlice, b: ffi::RustSlice) -> ffi::Ru
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn rnrs_is_positive(value: ffi::RustSlice) -> ffi::RustBuffer {
     ffi::catch_json(|| {
@@ -19,6 +23,7 @@ pub extern "C" fn rnrs_is_positive(value: ffi::RustSlice) -> ffi::RustBuffer {
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn rnrs_greet(name: ffi::RustSlice) -> ffi::RustBuffer {
     ffi::catch_json(|| {
@@ -27,6 +32,7 @@ pub extern "C" fn rnrs_greet(name: ffi::RustSlice) -> ffi::RustBuffer {
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn rnrs_scale_values(values: ffi::RustSlice) -> ffi::RustBuffer {
     ffi::catch_json(|| {
@@ -35,6 +41,7 @@ pub extern "C" fn rnrs_scale_values(values: ffi::RustSlice) -> ffi::RustBuffer {
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn rnrs_annotate_object(value: ffi::RustSlice) -> ffi::RustBuffer {
     ffi::catch_json(|| {
@@ -43,6 +50,7 @@ pub extern "C" fn rnrs_annotate_object(value: ffi::RustSlice) -> ffi::RustBuffer
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn rnrs_calculate_async(value: ffi::RustSlice) -> ffi::RustBuffer {
     ffi::catch_json(|| {
@@ -51,6 +59,7 @@ pub extern "C" fn rnrs_calculate_async(value: ffi::RustSlice) -> ffi::RustBuffer
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[no_mangle]
 pub extern "C" fn rnrs_inspect_with_callback(value: ffi::RustSlice, callback: ffi::RustCallback) -> ffi::RustBuffer {
     ffi::catch_json(|| {

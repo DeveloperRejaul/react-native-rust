@@ -15,9 +15,10 @@ Usage:
   react-native-rust init             Add Rust support and generate functions from the Spec interface
   react-native-rust init --app       Add app-local Rust support to a React Native app
   react-native-rust generate         Regenerate Rust, C++, and TypeScript glue from Spec
-  react-native-rust doctor [target]  Check Rust and optional ios/android prerequisites
+  react-native-rust doctor [target]  Check Rust and optional ios/android/web prerequisites
   react-native-rust build ios        Build an iOS XCFramework
   react-native-rust build android    Build Android static archives for supported ABIs
+  react-native-rust build web        Build a WebAssembly package for react-native-web
   react-native-rust --help           Show this help
 
 Create a library first with the C++ module template from:
@@ -81,10 +82,10 @@ function main(args: string[]): void {
     });
   }
   if (command === 'doctor') {
-    if (option && option !== 'ios' && option !== 'android') {
-      throw new Error('Choose a doctor target: ios or android.');
+    if (option && option !== 'ios' && option !== 'android' && option !== 'web') {
+      throw new Error('Choose a doctor target: ios, android, or web.');
     }
-    const target = option as 'ios' | 'android' | undefined;
+    const target = option as 'ios' | 'android' | 'web' | undefined;
     return appModule ? inDirectory(appModule, () => doctor(target)) : doctor(target);
   }
   if (command === 'build') {

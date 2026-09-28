@@ -1,6 +1,11 @@
 declare namespace CodegenTypes { type UnsafeObject = object; }
 import RustApp from './NativeRustApp';
 
+/** No-op on native, where methods are always ready to call; matches the web module's async init so callers don't need to branch on platform. */
+export function initRustWeb(): Promise<void> {
+  return Promise.resolve();
+}
+
 export function multiply(a: number, b: number): number {
   return RustApp.multiply(a, b);
 }

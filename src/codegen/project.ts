@@ -6,7 +6,7 @@ import {
   SOURCE_START,
   SOURCE_END,
 } from './constants';
-import { renderCppMethods, renderRustExports, renderRustHandler, renderRustModuleList, renderWrappers } from './renderers';
+import { renderCppMethods, renderRustExports, renderRustHandler, renderRustModuleList, renderRustWasmModule, renderWrappers } from './renderers';
 import { MethodInfo } from './types';
 
 /** Replaces the text between a `[start, end]` marker pair, or returns `null` if the markers are missing. */
@@ -123,10 +123,12 @@ export function validateExistingHandler(filePath: string, method: MethodInfo): v
 
 /**
  * Renders every generated file for a library or app-local module: the C++ TurboModule
- * methods, the Rust FFI exports and handler stubs, and the TypeScript wrappers. Returns a
- * map of absolute file path to new contents; the caller is responsible for writing them.
+ * methods, the Rust FFI and WASM exports and handler stubs, and the TypeScript wrappers.
+ * `crateName` is the Rust crate's package name (from `rust/Cargo.toml`), used to import the
+ * `wasm-pack --target web` output from the generated web wrapper. Returns a map of absolute
+ * file path to new contents; the caller is responsible for writing them.
  */
-export function renderProjectBindings(root: string, moduleName: string, methods: MethodInfo[], initialize: boolean): Map<string, string> {
+export function renderProjectBindings(root: string, moduleName: string, methods: MethodInfo[], initialize: boolean, crateName: string): Map<string, string> {
   const headerPath = path.join(root, 'cpp', `${moduleName}Impl.h`);
   const sourcePath = path.join(root, 'cpp', `${moduleName}Impl.cpp`);
   const header = fs.readFileSync(headerPath, 'utf8');
@@ -158,6 +160,7 @@ export function renderProjectBindings(root: string, moduleName: string, methods:
     [sourcePath, updatedSource],
     [path.join(rustDirectory, 'lib.rs'), renderRustExports(methods)],
     [path.join(rustDirectory, 'api', 'mod.rs'), moduleList],
+    [path.join(rustDirectory, 'wasm.rs'), renderRustWasmModule(methods)],
   ]);
   for (const method of methods) {
     const handlerPath = path.join(rustDirectory, 'api', `${method.rustName}.rs`);
@@ -165,9 +168,9 @@ export function renderProjectBindings(root: string, moduleName: string, methods:
     else updates.set(handlerPath, renderRustHandler(method));
   }
 
-  const wrappers = renderWrappers(methods, moduleName);
+  const wrappers = renderWrappers(methods, moduleName, crateName);
   const generatedModulePath = path.join(root, 'src', 'rust-generated');
-  updates.set(`${generatedModulePath}.tsx`, wrappers.fallback);
+  updates.set(`${generatedModulePath}.tsx`, wrappers.web);
   updates.set(`${generatedModulePath}.native.tsx`, wrappers.native);
   const indexPath = path.join(root, 'src', 'index.tsx');
   let index = fs.readFileSync(indexPath, 'utf8');

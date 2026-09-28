@@ -68,6 +68,15 @@ export function packageRoot(): PackageRootInfo {
   return { root, manifest, manifestPath, moduleName: moduleMatch[1] };
 }
 
+/** Reads the Rust crate's package name from its `Cargo.toml` `[package] name` field. */
+function readCrateName(rustRoot: string): string {
+  const manifestPath = path.join(rustRoot, 'Cargo.toml');
+  const cargoManifest = fs.readFileSync(manifestPath, 'utf8');
+  const crateMatch = cargoManifest.match(/^name\s*=\s*"([a-zA-Z0-9_-]+)"/m);
+  if (!crateMatch) throw new Error('Could not read the Rust crate name from rust/Cargo.toml.');
+  return crateMatch[1];
+}
+
 /**
  * Initializes Rust support in a freshly scaffolded C++ TurboModule library: generates the
  * Rust crate, C ABI, and native/TypeScript bindings from the template's demo `Spec`, and
@@ -132,14 +141,14 @@ export function init(): void {
   );
 
   const rustFiles: Record<string, string> = {
-    'Cargo.toml': `[package]\nname = "${crateDirName}"\nversion = "0.1.0"\nedition = "2021"\n\n[lib]\ncrate-type = ["staticlib"]\n\n[dependencies]\nserde = { version = "1", features = ["derive"] }\nserde_json = "1"\n\n[build-dependencies]\ncbindgen = "0.26"\n`,
+    'Cargo.toml': `[package]\nname = "${crateDirName}"\nversion = "0.1.0"\nedition = "2021"\n\n[lib]\ncrate-type = ["staticlib", "cdylib"]\n\n[dependencies]\nserde = { version = "1", features = ["derive"] }\nserde_json = "1"\n\n[target.'cfg(target_arch = "wasm32")'.dependencies]\nwasm-bindgen = "0.2"\njs-sys = "0.3"\n\n[build-dependencies]\ncbindgen = "0.26"\n`,
     'build.rs': `use std::path::PathBuf;\n\nfn main() {\n    let crate_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();\n    let output = PathBuf::from(&crate_dir).join("include/rust_api.h");\n    std::fs::create_dir_all(output.parent().unwrap()).unwrap();\n    cbindgen::generate(&crate_dir)\n        .expect("failed to generate the Rust C header")\n        .write_to_file(output);\n}\n`,
     'cbindgen.toml': `language = "C++"\n`,
     'src/ffi.rs': renderRustFfiModule(),
-    'README.md': `# Rust core\n\nRust handlers are generated from the TurboModule Spec interface in src/Native${moduleName}.ts. Edit the generated functions under rust/src/api/ and regenerate native glue with npx react-native-rust generate.\n\nRun cargo test --manifest-path rust/Cargo.toml for Rust tests. Build iOS and Android artifacts with npx react-native-rust build ios and npx react-native-rust build android before native app builds.\n`,
+    'README.md': `# Rust core\n\nRust handlers are generated from the TurboModule Spec interface in src/Native${moduleName}.ts. Edit the generated functions under rust/src/api/ and regenerate native glue with npx react-native-rust generate.\n\nRun cargo test --manifest-path rust/Cargo.toml for Rust tests. Build iOS and Android artifacts with npx react-native-rust build ios and npx react-native-rust build android before native app builds. Build the react-native-web WebAssembly package with npx react-native-rust build web (requires wasm-pack and the wasm32-unknown-unknown Rust target).\n`,
   };
 
-  const updates = renderProjectBindings(root, moduleName, methods, true);
+  const updates = renderProjectBindings(root, moduleName, methods, true, crateDirName);
   updates.set(projectFiles.androidCmake, androidCmake);
   updates.set(projectFiles.podspec, podspec);
   const cliManifest = readJson(path.join(__dirname, '..', 'package.json'));
@@ -160,6 +169,7 @@ export function init(): void {
       'rust:generate': 'react-native-rust generate',
       'rust:build:ios': 'react-native-rust build ios',
       'rust:build:android': 'react-native-rust build android',
+      'rust:build:web': 'react-native-rust build web',
     },
   };
   const packageFiles = Array.isArray(updatedManifest.files) ? [...updatedManifest.files] : [];
@@ -201,7 +211,7 @@ export function generate(): void {
   }
   const nativeSpecPath = path.join(root, 'src', `Native${moduleName}.ts`);
   const methods = parseSpec(fs.readFileSync(nativeSpecPath, 'utf8'), path.relative(root, nativeSpecPath));
-  const updates = renderProjectBindings(root, moduleName, methods, false);
+  const updates = renderProjectBindings(root, moduleName, methods, false, readCrateName(rustPath));
   for (const [filePath, fileContents] of updates) {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, fileContents);
@@ -209,8 +219,8 @@ export function generate(): void {
   console.log(`Regenerated Rust, C++, and TypeScript glue for ${methods.length} Spec method(s).`);
 }
 
-/** Checks that the Rust toolchain, and optionally the iOS or Android native toolchain, are available. Sets `process.exitCode` on failure. */
-export function doctor(target: 'ios' | 'android' | undefined): void {
+/** Checks that the Rust toolchain, and optionally the iOS, Android, or web toolchain, are available. Sets `process.exitCode` on failure. */
+export function doctor(target: 'ios' | 'android' | 'web' | undefined): void {
   const { root } = packageRoot();
   if (!fs.existsSync(path.join(root, rustDirectory, 'Cargo.toml'))) {
     throw new Error('Rust is not initialized. Run `npx react-native-rust init` first.');
@@ -236,6 +246,14 @@ export function doctor(target: 'ios' | 'android' | undefined): void {
     console.log(`${cargoNdk.ok ? 'OK' : 'MISSING'} cargo-ndk`);
     failed ||= !cargoNdk.ok;
   }
+  if (target === 'web') {
+    const wasmPack = run('wasm-pack', ['--version']);
+    const installedTargets = run('rustup', ['target', 'list', '--installed']);
+    const hasWasmTarget = installedTargets.ok && (installedTargets.output || '').includes('wasm32-unknown-unknown');
+    console.log(`${wasmPack.ok ? 'OK' : 'MISSING'} wasm-pack`);
+    console.log(`${hasWasmTarget ? 'OK' : 'MISSING'} wasm32-unknown-unknown Rust target (rustup target add wasm32-unknown-unknown)`);
+    failed ||= !wasmPack.ok || !hasWasmTarget;
+  }
   if (failed) process.exitCode = 1;
 }
 
@@ -247,10 +265,7 @@ export function build(platform: string | undefined): void {
   if (!fs.existsSync(manifestPath)) {
     throw new Error('Rust is not initialized. Run `npx react-native-rust init` first.');
   }
-  const cargoManifest = fs.readFileSync(manifestPath, 'utf8');
-  const crateMatch = cargoManifest.match(/^name\s*=\s*"([a-zA-Z0-9_-]+)"/m);
-  if (!crateMatch) throw new Error('Could not read the Rust crate name from rust/Cargo.toml.');
-  const crateName = crateMatch[1];
+  const crateName = readCrateName(rustRoot);
   const releasePath = (target: string) => path.join(rustRoot, 'target', target, 'release', `lib${crateName}.a`);
 
   if (platform === 'ios') {
@@ -303,5 +318,12 @@ export function build(platform: string | undefined): void {
     console.log(`Built Android static archives for ${manifest.name}.`);
     return;
   }
-  throw new Error('Choose a build target: ios or android.');
+
+  if (platform === 'web') {
+    const result = run('wasm-pack', ['build', '--target', 'web', '--out-dir', path.join('build', 'web', 'pkg')], { inherit: true, cwd: rustRoot });
+    if (!result.ok) throw new Error(`Web build failed: ${result.message}`);
+    console.log(`Built rust/build/web/pkg for ${manifest.name}.`);
+    return;
+  }
+  throw new Error('Choose a build target: ios, android, or web.');
 }
