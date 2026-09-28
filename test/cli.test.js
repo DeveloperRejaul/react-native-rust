@@ -4,9 +4,9 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { afterEach, test } = require('node:test');
-const { build } = require('../bin/react-native-rust-lib.js');
+const { build } = require('../dist/react-native-rust-lib.js');
 
-const cliPath = path.resolve(__dirname, '../bin/react-native-rust.js');
+const cliPath = path.resolve(__dirname, '../dist/react-native-rust.js');
 const temporaryDirectories = [];
 
 function createLibrary({ cppModule = true, scripts = {} } = {}) {

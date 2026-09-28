@@ -1,13 +1,25 @@
-const { supportedTypes, rustKeywords, cppKeywords, ts } = require('./constants');
+import { supportedTypes, rustKeywords, cppKeywords, ts } from './constants';
+import { CallbackInfo, CallbackParamInfo, MethodInfo, ParamInfo, Role, TypeInfo } from './types';
 
-function typeInfo(typeNode, sourceFile, methodName, role) {
+/** A `ts.SourceFile` also exposes its parse errors via this internal, undocumented property. */
+interface SourceFileWithDiagnostics extends ts.SourceFile {
+  parseDiagnostics: readonly ts.Diagnostic[];
+}
+
+/**
+ * Resolves a TypeScript type node to its Rust/C++ mapping, or throws if the type
+ * is not part of the supported surface (see the Spec parsing rules in the README).
+ */
+export function typeInfo(typeNode: ts.TypeNode, sourceFile: ts.SourceFile, methodName: string, role: Role): TypeInfo {
   const info = supportedTypes.get(typeNode.kind);
   if (info && !(role === 'parameter' && typeNode.kind === ts.SyntaxKind.VoidKeyword)) return info;
 
   if (role === 'return' && ts.isTypeReferenceNode(typeNode) && typeNode.typeName.getText(sourceFile) === 'Promise') {
     if (typeNode.typeArguments?.length !== 1) throw new Error(`Promise return in ${methodName}() must declare one result type.`);
     const result = typeInfo(typeNode.typeArguments[0], sourceFile, methodName, 'promise result');
-    if (result.kind === 'callback' || result.promise) throw new Error(`Nested Promise or callback results are not supported in ${methodName}().`);
+    if (result.promise) {
+      throw new Error(`Nested Promise or callback results are not supported in ${methodName}().`);
+    }
     return { ...result, typescript: typeNode.getText(sourceFile), promise: true };
   }
 
@@ -33,7 +45,7 @@ function typeInfo(typeNode, sourceFile, methodName, role) {
       : null;
   if (arrayElement) {
     const elementType = typeInfo(arrayElement, sourceFile, methodName, 'array element');
-    if (elementType.kind === 'callback' || elementType.promise || elementType.kind === 'void') {
+    if (elementType.promise || elementType.kind === 'void') {
       throw new Error(`Unsupported array element type in ${methodName}().`);
     }
     return {
@@ -49,19 +61,24 @@ function typeInfo(typeNode, sourceFile, methodName, role) {
   throw new Error(`Unsupported ${role} type "${text}" in ${methodName}(). Supported types are number, boolean, string, arrays, and CodegenTypes.UnsafeObject${role === 'return' ? ', plus void and Promise<T>' : ''}.`);
 }
 
-function callbackInfo(typeNode, sourceFile, methodName) {
+/**
+ * Resolves a function-type node (a callback parameter) to its Rust/C++ mapping.
+ * Callbacks must return `void`, have at most four named, explicitly typed,
+ * required parameters, and cannot themselves accept callbacks or Promises.
+ */
+export function callbackInfo(typeNode: ts.TypeNode, sourceFile: ts.SourceFile, methodName: string): CallbackInfo {
   if (!ts.isFunctionTypeNode(typeNode) || typeNode.typeParameters?.length) {
     throw new Error(`Unsupported callback signature in ${methodName}().`);
   }
   if (typeNode.type.kind !== ts.SyntaxKind.VoidKeyword || typeNode.parameters.length > 4) {
     throw new Error(`Callbacks in ${methodName}() must return void and have at most four parameters.`);
   }
-  const params = typeNode.parameters.map((parameter) => {
+  const params: CallbackParamInfo[] = typeNode.parameters.map((parameter) => {
     if (!ts.isIdentifier(parameter.name) || parameter.questionToken || parameter.dotDotDotToken || !parameter.type) {
       throw new Error(`Callback parameters in ${methodName}() must be named, required, and explicitly typed.`);
     }
     const info = typeInfo(parameter.type, sourceFile, methodName, 'callback parameter');
-    if (info.promise || info.kind === 'callback' || info.kind === 'void') {
+    if (info.promise || info.kind === 'void') {
       throw new Error(`Unsupported callback parameter type in ${methodName}().`);
     }
     return { name: parameter.name.text, ...info };
@@ -69,36 +86,43 @@ function callbackInfo(typeNode, sourceFile, methodName) {
   return { kind: 'callback', typescript: typeNode.getText(sourceFile), cpp: 'jsi::Function', params };
 }
 
-function toSnakeCase(name) {
+/** Converts a TypeScript `camelCase` identifier to a Rust `snake_case` identifier. */
+export function toSnakeCase(name: string): string {
   return name
     .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
     .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
     .toLowerCase();
 }
 
-function validateIdentifier(name, location) {
+/** Rejects identifiers that would be invalid or reserved in the generated Rust or C++ code. */
+export function validateIdentifier(name: string, location: string): void {
   if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name) || rustKeywords.has(name) || cppKeywords.has(name)) {
     throw new Error(`Unsupported identifier "${name}" in ${location}; use a non-keyword identifier.`);
   }
 }
 
-function parseSpec(sourceText, fileName = 'NativeModule.ts') {
-  const sourceFile = ts.createSourceFile(fileName, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+/**
+ * Parses a TurboModule `Spec` interface from TypeScript source text and returns
+ * one {@link MethodInfo} per supported method. Throws on the first unsupported or
+ * malformed signature, before any files are generated.
+ */
+export function parseSpec(sourceText: string, fileName = 'NativeModule.ts'): MethodInfo[] {
+  const sourceFile = ts.createSourceFile(fileName, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS) as SourceFileWithDiagnostics;
   if (sourceFile.parseDiagnostics.length > 0) {
     const diagnostic = sourceFile.parseDiagnostics[0];
     throw new Error(`Could not parse ${fileName}: ${ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')}`);
   }
 
-  const spec = sourceFile.statements.find((statement) => (
+  const spec = sourceFile.statements.find((statement): statement is ts.InterfaceDeclaration => (
     ts.isInterfaceDeclaration(statement) && statement.name.text === 'Spec'
   ));
   if (!spec) throw new Error(`No "Spec" interface was found in ${fileName}.`);
   if (spec.typeParameters?.length) throw new Error('Generic TurboModule Spec interfaces are not supported.');
   if (spec.members.length === 0) throw new Error('The Spec interface must declare at least one method.');
 
-  const names = new Set();
-  const rustNames = new Set();
-  const methods = spec.members.map((member) => {
+  const names = new Set<string>();
+  const rustNames = new Set<string>();
+  const methods: MethodInfo[] = spec.members.map((member) => {
     if (!ts.isMethodSignature(member)) {
       throw new Error('Only method signatures are supported in the Spec interface.');
     }
@@ -115,7 +139,7 @@ function parseSpec(sourceText, fileName = 'NativeModule.ts') {
     if (rustNames.has(rustName)) throw new Error(`Multiple Spec methods map to the Rust name "${rustName}".`);
     rustNames.add(rustName);
 
-    const params = member.parameters.map((parameter) => {
+    const params: ParamInfo[] = member.parameters.map((parameter) => {
       if (!ts.isIdentifier(parameter.name) || parameter.dotDotDotToken || parameter.questionToken || parameter.initializer) {
         throw new Error(`Rest, optional, and destructured parameters are not supported in ${name}().`);
       }
@@ -125,7 +149,7 @@ function parseSpec(sourceText, fileName = 'NativeModule.ts') {
       const info = ts.isFunctionTypeNode(parameter.type)
         ? callbackInfo(parameter.type, sourceFile, name)
         : typeInfo(parameter.type, sourceFile, name, 'parameter');
-      return { name: paramName, ...info };
+      return { name: paramName, ...info } as ParamInfo;
     });
     if (new Set(params.map((param) => param.name)).size !== params.length) {
       throw new Error(`Duplicate parameter names are not supported in ${name}().`);
@@ -146,11 +170,3 @@ function parseSpec(sourceText, fileName = 'NativeModule.ts') {
   }
   return methods;
 }
-
-module.exports = {
-  typeInfo,
-  callbackInfo,
-  toSnakeCase,
-  validateIdentifier,
-  parseSpec,
-};

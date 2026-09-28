@@ -2,6 +2,14 @@
 
 A React Native C++ TurboModule library backed by Rust. The TypeScript TurboModule `Spec` is the API contract; Rust implements the logic. [`@rejaul/react-native-rust`](https://www.npmjs.com/package/@rejaul/react-native-rust) generates the C ABI, C++ bridge, and TypeScript wrappers connecting the two. The `example/` app calls every method on both Android and iOS through the generated bridge.
 
+## Screenshots
+
+The `example/` app calling every generated method and rendering its live Rust result, on both platforms:
+
+| Android | iOS |
+| --- | --- |
+| ![Android screenshot](../doc/screenshots/android.png) | ![iOS screenshot](../doc/screenshots/ios.png) |
+
 ## Requirements
 
 - Node.js 22.11 or newer and Yarn 4

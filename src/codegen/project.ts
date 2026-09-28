@@ -1,14 +1,16 @@
-const fs = require('node:fs');
-const path = require('node:path');
-const {
+import fs from 'node:fs';
+import path from 'node:path';
+import {
   HEADER_START,
   HEADER_END,
   SOURCE_START,
   SOURCE_END,
-} = require('./constants');
-const { renderCppMethods, renderRustExports, renderRustHandler, renderRustModuleList, renderWrappers } = require('./renderers');
+} from './constants';
+import { renderCppMethods, renderRustExports, renderRustHandler, renderRustModuleList, renderWrappers } from './renderers';
+import { MethodInfo } from './types';
 
-function replaceMarkedRegion(source, startMarker, endMarker, generated) {
+/** Replaces the text between a `[start, end]` marker pair, or returns `null` if the markers are missing. */
+export function replaceMarkedRegion(source: string, startMarker: string, endMarker: string, generated: string): string | null {
   const start = source.indexOf(startMarker);
   const end = source.indexOf(endMarker);
   if (start < 0 || end < start) return null;
@@ -16,7 +18,8 @@ function replaceMarkedRegion(source, startMarker, endMarker, generated) {
   return `${source.slice(0, start)}${block}${source.slice(end + endMarker.length)}`;
 }
 
-function replaceTemplateMethod(source, markerStart, markerEnd, generated, methodNeedle) {
+/** Replaces a brace-delimited C++ method body (matched by brace depth) with a marked, generated block. */
+export function replaceTemplateMethod(source: string, markerStart: string, markerEnd: string, generated: string, methodNeedle: string): string {
   const functionIndex = source.indexOf(methodNeedle);
   if (functionIndex < 0) throw new Error(`Could not locate C++ template method "${methodNeedle}".`);
   const lineStart = source.lastIndexOf('\n', functionIndex) + 1;
@@ -39,7 +42,8 @@ function replaceTemplateMethod(source, markerStart, markerEnd, generated, method
   return `${source.slice(0, lineStart)}${block}${source.slice(bodyEnd)}`;
 }
 
-function hasDefaultMultiplyBody(source, moduleName) {
+/** True when the template's `multiply` method still has its unmodified demo body (`return a * b;`). */
+export function hasDefaultMultiplyBody(source: string, moduleName: string): boolean {
   const methodIndex = source.indexOf(`${moduleName}Impl::multiply(`);
   if (methodIndex < 0) return false;
   const bodyStart = source.indexOf('{', methodIndex);
@@ -57,7 +61,18 @@ function hasDefaultMultiplyBody(source, moduleName) {
   return false;
 }
 
-function updateCppFile(source, markers, generated, templateMethod, methodNeedle, includeRustHeader = false) {
+/**
+ * Writes the generated method block into a C++ file: into existing generated markers if
+ * present, or by replacing the template's demo `multiply` method on first `init`.
+ */
+export function updateCppFile(
+  source: string,
+  markers: [string, string],
+  generated: string,
+  templateMethod: boolean,
+  methodNeedle: string,
+  includeRustHeader = false,
+): string {
   let updated = source;
   if (includeRustHeader && !updated.includes('../rust/include/rust_api.h')) {
     if (!updated.includes('#pragma once')) throw new Error('Unsupported C++ module header template.');
@@ -77,11 +92,16 @@ function updateCppFile(source, markers, generated, templateMethod, methodNeedle,
   return replaceTemplateMethod(updated, markers[0], markers[1], generated, methodNeedle);
 }
 
-function normalizeSignature(text) {
+/** Collapses whitespace so two differently formatted Rust signatures can be compared for equality. */
+export function normalizeSignature(text: string): string {
   return text.replace(/\s+/g, '').replace(/,\)/g, ')');
 }
 
-function validateExistingHandler(filePath, method) {
+/**
+ * Ensures a previously generated Rust handler's signature still matches the current Spec method.
+ * Regeneration preserves handler bodies, so a mismatch must fail loudly instead of silently drifting.
+ */
+export function validateExistingHandler(filePath: string, method: MethodInfo): void {
   const contents = fs.readFileSync(filePath, 'utf8');
   const signaturePattern = new RegExp(`pub\\s+fn\\s+${method.rustName}\\s*\\(([^)]*)\\)\\s*->\\s*([^\\{]+)\\{`);
   const match = contents.match(signaturePattern);
@@ -94,14 +114,19 @@ function validateExistingHandler(filePath, method) {
     ? `Result<${method.returnType.rust}, String>`
     : method.returnType.rust;
   const expected = `${method.rustName}(${args}) -> ${returnType}`;
-    const expectedSignature = `pub fn ${expected} {`;
-    if (normalizeSignature(contents).includes(normalizeSignature(expectedSignature))) return;
+  const expectedSignature = `pub fn ${expected} {`;
+  if (normalizeSignature(contents).includes(normalizeSignature(expectedSignature))) return;
   if (!match || normalizeSignature(match[0].replace(/^pub\s+fn\s+/, '').replace(/\{\s*$/, '')) !== normalizeSignature(expected)) {
     throw new Error(`Rust handler ${path.relative(process.cwd(), filePath)} does not match the TypeScript Spec. Update its signature before regenerating.`);
   }
 }
 
-function renderProjectBindings(root, moduleName, methods, initialize) {
+/**
+ * Renders every generated file for a library or app-local module: the C++ TurboModule
+ * methods, the Rust FFI exports and handler stubs, and the TypeScript wrappers. Returns a
+ * map of absolute file path to new contents; the caller is responsible for writing them.
+ */
+export function renderProjectBindings(root: string, moduleName: string, methods: MethodInfo[], initialize: boolean): Map<string, string> {
   const headerPath = path.join(root, 'cpp', `${moduleName}Impl.h`);
   const sourcePath = path.join(root, 'cpp', `${moduleName}Impl.cpp`);
   const header = fs.readFileSync(headerPath, 'utf8');
@@ -128,7 +153,7 @@ function renderProjectBindings(root, moduleName, methods, initialize) {
 
   const rustDirectory = path.join(root, 'rust', 'src');
   const moduleList = renderRustModuleList(methods);
-  const updates = new Map([
+  const updates = new Map<string, string>([
     [headerPath, updatedHeader],
     [sourcePath, updatedSource],
     [path.join(rustDirectory, 'lib.rs'), renderRustExports(methods)],
@@ -156,13 +181,3 @@ function renderProjectBindings(root, moduleName, methods, initialize) {
   updates.set(indexPath, index);
   return updates;
 }
-
-module.exports = {
-  replaceMarkedRegion,
-  replaceTemplateMethod,
-  hasDefaultMultiplyBody,
-  updateCppFile,
-  normalizeSignature,
-  validateExistingHandler,
-  renderProjectBindings,
-};

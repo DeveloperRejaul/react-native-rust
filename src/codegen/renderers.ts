@@ -1,4 +1,7 @@
-function renderRustFfiModule() {
+import { MethodInfo } from './types';
+
+/** Emits the hand-authored Rust FFI runtime shared by every generated crate. */
+export function renderRustFfiModule(): string {
   return `use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::ffi::c_void;
@@ -77,7 +80,8 @@ pub extern "C" fn rnrs_buffer_free(buffer: RustBuffer) {
 `;
 }
 
-function renderRustExports(methods) {
+/** Emits the crate's `lib.rs`: the `#[no_mangle]` C ABI entry point for every Spec method. */
+export function renderRustExports(methods: MethodInfo[]): string {
   const lines = ['mod api;', 'mod ffi;', 'pub use ffi::{rnrs_buffer_free, RustBuffer, RustCallback, RustSlice};', ''];
   for (const method of methods) {
     const abiParams = method.params.map((param) => `${param.name}: ffi::${param.kind === 'callback' ? 'RustCallback' : 'RustSlice'}`).join(', ');
@@ -115,7 +119,8 @@ function renderRustExports(methods) {
   return lines.join('\n');
 }
 
-function renderRustHandler(method) {
+/** Emits a placeholder Rust handler body for one Spec method, ready for the author to implement. */
+export function renderRustHandler(method: MethodInfo): string {
   const params = method.params.map((param) => {
     if (param.kind === 'callback') {
       const callbackTypes = param.params.map((callbackParam) => callbackParam.rust).join(', ');
@@ -135,11 +140,13 @@ function renderRustHandler(method) {
   return lines.join('\n');
 }
 
-function renderRustModuleList(methods) {
+/** Emits `rust/src/api/mod.rs`, declaring one module per Spec method's handler file. */
+export function renderRustModuleList(methods: MethodInfo[]): string {
   return `${methods.map((method) => `pub(crate) mod ${method.rustName};`).join('\n')}\n`;
 }
 
-function renderCppHelpers() {
+/** Emits the hand-authored C++ helpers (JSON bridging, callback dispatch, Promise plumbing) shared by every generated module. */
+export function renderCppHelpers(): string {
   return `#include <exception>
 #include <string>
 #include <thread>
@@ -244,9 +251,10 @@ static jsi::Value rnrsMakePromise(
 }`;
 }
 
-function renderCppMethods(methods, moduleName) {
-  const cppArgName = (index) => `rnrsArg${index}`;
-  const cppType = (method) => method.returnType.promise ? 'jsi::Value' : method.returnType.cpp;
+/** Emits the generated C++ TurboModule method declarations and definitions for every Spec method. */
+export function renderCppMethods(methods: MethodInfo[], moduleName: string): { header: string; source: string } {
+  const cppArgName = (index: number) => `rnrsArg${index}`;
+  const cppType = (method: MethodInfo) => method.returnType.promise ? 'jsi::Value' : method.returnType.cpp;
   const declarations = methods.map((method) => {
     const params = method.params.map((param, index) => `${param.cpp} ${cppArgName(index)}`);
     return `  ${cppType(method)} ${method.name}(jsi::Runtime& rnrsRuntime${params.length ? `, ${params.join(', ')}` : ''});`;
@@ -255,9 +263,9 @@ function renderCppMethods(methods, moduleName) {
   const definitions = methods.map((method) => {
     const params = method.params.map((param, index) => `${param.cpp} ${cppArgName(index)}`);
     const signature = `${cppType(method)} ${moduleName}Impl::${method.name}(\n  jsi::Runtime& rnrsRuntime${params.length ? `,\n  ${params.join(',\n  ')}` : ''}\n)`;
-    const jsonArgs = [];
-    const callbackArgs = [];
-    const setup = [];
+    const jsonArgs: { json: string; slice: string }[] = [];
+    const callbackArgs: { name: string; context: string; bridge: string }[] = [];
+    const setup: string[] = [];
     method.params.forEach((param, index) => {
       const name = cppArgName(index);
       if (param.kind === 'callback') {
@@ -280,7 +288,7 @@ function renderCppMethods(methods, moduleName) {
     ));
     if (method.returnType.promise) {
       const captures = jsonArgs.map(({ json }) => `${json} = std::move(${json})`);
-      const workerLines = [];
+      const workerLines: string[] = [];
       method.params.forEach((param, index) => {
         if (param.kind !== 'callback') {
           const json = `rnrsJson${index}`;
@@ -294,19 +302,17 @@ function renderCppMethods(methods, moduleName) {
     const call = `auto rnrsResult = ${method.symbol}(${ffiArgs.join(', ')});`;
     const callbackErrorChecks = callbackArgs.map(({ context }) => `  if (${context}.exception) { rnrs_buffer_free(rnrsResult); std::rethrow_exception(${context}.exception); }`);
     const decoded = 'auto rnrsValue = rnrsFromRust(rnrsRuntime, rnrsResult);';
-    let resultLine;
+    let resultLine: string;
     switch (method.returnType.kind) {
-      case 'void': resultLine = '  (void)rnrsValue;\n  return;'; break;
-      case 'number': resultLine = '  return rnrsValue.asNumber();'; break;
-      case 'boolean': resultLine = '  return rnrsValue.asBool();'; break;
-      case 'string': resultLine = '  return rnrsValue.asString(rnrsRuntime);'; break;
-      case 'array': resultLine = '  return rnrsValue.asObject(rnrsRuntime).asArray(rnrsRuntime);'; break;
-      case 'json':
-        if (method.returnType.cpp === 'jsi::String') resultLine = '  return rnrsValue.asString(rnrsRuntime);';
-        else if (method.returnType.cpp === 'jsi::Array') resultLine = '  return rnrsValue.asObject(rnrsRuntime).asArray(rnrsRuntime);';
-        else resultLine = '  return rnrsValue.asObject(rnrsRuntime);';
-        break;
-      default: throw new Error(`No C++ return conversion for ${method.returnType.kind}.`);
+    case 'void': resultLine = '  (void)rnrsValue;\n  return;'; break;
+    case 'number': resultLine = '  return rnrsValue.asNumber();'; break;
+    case 'boolean': resultLine = '  return rnrsValue.asBool();'; break;
+    case 'json':
+      if (method.returnType.cpp === 'jsi::String') resultLine = '  return rnrsValue.asString(rnrsRuntime);';
+      else if (method.returnType.cpp === 'jsi::Array') resultLine = '  return rnrsValue.asObject(rnrsRuntime).asArray(rnrsRuntime);';
+      else resultLine = '  return rnrsValue.asObject(rnrsRuntime);';
+      break;
+    default: throw new Error(`No C++ return conversion for ${method.returnType.kind}.`);
     }
     return [signature + ' {', ...setup, `  ${call}`, ...callbackErrorChecks, `  ${decoded}`, resultLine, '}'].join('\n');
   });
@@ -316,9 +322,10 @@ function renderCppMethods(methods, moduleName) {
   };
 }
 
-function renderWrappers(methods, moduleName) {
+/** Emits the TypeScript wrapper module pair: the native-backed export and the non-native fallback. */
+export function renderWrappers(methods: MethodInfo[], moduleName: string): { native: string; fallback: string } {
   const nativeLines = [`import ${moduleName} from './Native${moduleName}';`, ''];
-  const fallbackLines = [];
+  const fallbackLines: string[] = [];
   const usesUnsafeObject = methods.some((method) => (
     method.returnType.typescript.includes('UnsafeObject')
     || method.params.some((param) => param.typescript.includes('UnsafeObject'))
@@ -345,13 +352,3 @@ function renderWrappers(methods, moduleName) {
     fallback: fallbackLines.join('\n'),
   };
 }
-
-module.exports = {
-  renderRustFfiModule,
-  renderRustExports,
-  renderRustHandler,
-  renderRustModuleList,
-  renderCppHelpers,
-  renderCppMethods,
-  renderWrappers,
-};

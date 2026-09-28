@@ -8,9 +8,12 @@ The repository is an npm CLI for React Native library authors and app developers
 
 ## Current Structure
 
-- `bin/react-native-rust.js`: npm CLI for initializing Rust and generating/building mobile bindings.
-- `bin/codegen.js`: TypeScript `Spec` parser and Rust/C++/TypeScript scaffold generator.
-- `bin/app.js`: app-local TurboModule scaffolding and React Native Codegen integration.
+- `src/react-native-rust.ts`: npm CLI entry point for initializing Rust and generating/building mobile bindings.
+- `src/react-native-rust-lib.ts`: library-mode `init`/`generate`/`doctor`/`build` commands.
+- `src/app.ts`: app-local TurboModule scaffolding and React Native Codegen integration.
+- `src/codegen/`: TypeScript `Spec` parser and Rust/C++/TypeScript scaffold generator, with shared types in `src/codegen/types.ts`.
+- `src/types.ts`: shared CLI-level types (package manifest shape, command results, etc.).
+- `dist/`: build output (`npm run build`, via esbuild); not committed to git. `npm run typecheck` runs `tsc` for type-checking only.
 - `example/`: React Native CLI app used to exercise app-local Rust mode.
 - `react-native-awesome-library-example/`: generated C++ TurboModule library (library mode output) with its own `example/` app exercising the full supported type surface, including Promise and callback methods.
 - `test/cli.test.js`: Node tests for CLI setup behavior.
@@ -52,7 +55,8 @@ Promise results may contain supported payload types; nested Promises are unsuppo
 
 Run the narrowest relevant checks for the change. Available project commands include:
 
-- `npm test` for CLI fixture tests (requires Node.js 18+).
+- `npm test` for CLI fixture tests (requires Node.js 18+); runs `tsc` type-checking and the esbuild `dist/` build first via `pretest`.
+- `npm run typecheck` (`tsc`, no emit) and `npm run lint` (ESLint over `src/`) for source-only checks.
 - Rust tests run from the generated React Native library using `npm run rust:test` (requires Rust/Cargo).
 - iOS/Android builds run from the generated React Native library using the `react-native-rust build` command (requires the respective platform toolchain).
 

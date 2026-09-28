@@ -1,20 +1,20 @@
-#!/usr/bin/env node
-
-const fs = require('node:fs');
-const path = require('node:path');
-const { spawnSync } = require('node:child_process');
-const { parseSpec, renderProjectBindings, renderRustFfiModule } = require('./codegen');
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { parseSpec, renderProjectBindings, renderRustFfiModule } from './codegen';
+import { CommandResult, PackageManifest, PackageRootInfo, RunOptions } from './types';
 
 const rustDirectory = 'rust';
 const iosTargets = ['aarch64-apple-ios', 'aarch64-apple-ios-sim', 'x86_64-apple-ios'];
-const androidTargets = [
+const androidTargets: [string, string][] = [
   ['arm64-v8a', 'aarch64-linux-android'],
   ['armeabi-v7a', 'armv7-linux-androideabi'],
   ['x86', 'i686-linux-android'],
   ['x86_64', 'x86_64-linux-android'],
 ];
 
-function run(command, args, options = {}) {
+/** Runs an external command synchronously, capturing output unless `options.inherit` is set. */
+export function run(command: string, args: string[], options: RunOptions = {}): CommandResult {
   const result = spawnSync(command, args, {
     cwd: options.cwd || process.cwd(),
     encoding: 'utf8',
@@ -30,15 +30,21 @@ function run(command, args, options = {}) {
   return { ok: true, output: (result.stdout || '').trim() };
 }
 
-function readJson(filePath) {
+/** Reads and parses a JSON file, wrapping any read/parse failure with the file path. */
+export function readJson(filePath: string): PackageManifest {
   try {
     return JSON.parse(fs.readFileSync(filePath, 'utf8'));
   } catch (error) {
-    throw new Error(`Cannot read ${filePath}: ${error.message}`);
+    throw new Error(`Cannot read ${filePath}: ${(error as Error).message}`, { cause: error });
   }
 }
 
-function packageRoot() {
+/**
+ * Resolves the current working directory as a C++ TurboModule library root: validates it
+ * declares `react-native`, has a `react-native.config.js` configured for the C++ module
+ * template, and extracts the module's C++ class name prefix from it.
+ */
+export function packageRoot(): PackageRootInfo {
   const root = process.cwd();
   const manifestPath = path.join(root, 'package.json');
   if (!fs.existsSync(manifestPath)) {
@@ -62,7 +68,13 @@ function packageRoot() {
   return { root, manifest, manifestPath, moduleName: moduleMatch[1] };
 }
 
-function init() {
+/**
+ * Initializes Rust support in a freshly scaffolded C++ TurboModule library: generates the
+ * Rust crate, C ABI, and native/TypeScript bindings from the template's demo `Spec`, and
+ * rewires the Android CMake and iOS podspec to link the (not-yet-built) Rust archive.
+ * Refuses to run if `rust/` already exists or the template was customized.
+ */
+export function init(): void {
   const { root, manifest, manifestPath, moduleName } = packageRoot();
   const rustPath = path.join(root, rustDirectory);
   if (fs.existsSync(rustPath)) {
@@ -73,7 +85,7 @@ function init() {
     throw new Error('package.json already defines a rust:test or rust:generate script; no files were changed.');
   }
 
-  const projectFiles = {
+  const projectFiles: Record<string, string> = {
     cppHeader: path.join(root, 'cpp', `${moduleName}Impl.h`),
     cppSource: path.join(root, 'cpp', `${moduleName}Impl.cpp`),
     nativeSpec: path.join(root, 'src', `Native${moduleName}.ts`),
@@ -119,7 +131,7 @@ function init() {
     `${podspecSource[0]}\n  s.vendored_frameworks = "rust/build/ios/${moduleName}Rust.xcframework"`,
   );
 
-  const rustFiles = {
+  const rustFiles: Record<string, string> = {
     'Cargo.toml': `[package]\nname = "${crateDirName}"\nversion = "0.1.0"\nedition = "2021"\n\n[lib]\ncrate-type = ["staticlib"]\n\n[dependencies]\nserde = { version = "1", features = ["derive"] }\nserde_json = "1"\n\n[build-dependencies]\ncbindgen = "0.26"\n`,
     'build.rs': `use std::path::PathBuf;\n\nfn main() {\n    let crate_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();\n    let output = PathBuf::from(&crate_dir).join("include/rust_api.h");\n    std::fs::create_dir_all(output.parent().unwrap()).unwrap();\n    cbindgen::generate(&crate_dir)\n        .expect("failed to generate the Rust C header")\n        .write_to_file(output);\n}\n`,
     'cbindgen.toml': `language = "C++"\n`,
@@ -136,11 +148,11 @@ function init() {
   const cliDependency = cliIsInstalled
     ? `^${cliManifest.version}`
     : `file:${path.relative(root, cliRoot).split(path.sep).join('/') || '.'}`;
-  const updatedManifest = {
+  const updatedManifest: PackageManifest = {
     ...manifest,
     devDependencies: {
       ...manifest.devDependencies,
-      [cliManifest.name]: manifest.devDependencies?.[cliManifest.name] || cliDependency,
+      [cliManifest.name as string]: manifest.devDependencies?.[cliManifest.name as string] || cliDependency,
     },
     scripts: {
       ...scripts,
@@ -180,7 +192,8 @@ function init() {
   console.log('Run `npx react-native-rust build ios` or `npx react-native-rust build android` before building the React Native app.');
 }
 
-function generate() {
+/** Regenerates the Rust ABI, C++ methods, and TypeScript wrappers from the current Spec, preserving Rust handler bodies. */
+export function generate(): void {
   const { root, moduleName } = packageRoot();
   const rustPath = path.join(root, rustDirectory);
   if (!fs.existsSync(path.join(rustPath, 'Cargo.toml'))) {
@@ -196,7 +209,8 @@ function generate() {
   console.log(`Regenerated Rust, C++, and TypeScript glue for ${methods.length} Spec method(s).`);
 }
 
-function doctor(target) {
+/** Checks that the Rust toolchain, and optionally the iOS or Android native toolchain, are available. Sets `process.exitCode` on failure. */
+export function doctor(target: 'ios' | 'android' | undefined): void {
   const { root } = packageRoot();
   if (!fs.existsSync(path.join(root, rustDirectory, 'Cargo.toml'))) {
     throw new Error('Rust is not initialized. Run `npx react-native-rust init` first.');
@@ -225,7 +239,8 @@ function doctor(target) {
   if (failed) process.exitCode = 1;
 }
 
-function build(platform) {
+/** Builds the Rust archive(s) for `ios` (an XCFramework) or `android` (per-ABI static archives). */
+export function build(platform: string | undefined): void {
   const { root, manifest, moduleName } = packageRoot();
   const rustRoot = path.join(root, rustDirectory);
   const manifestPath = path.join(rustRoot, 'Cargo.toml');
@@ -236,7 +251,7 @@ function build(platform) {
   const crateMatch = cargoManifest.match(/^name\s*=\s*"([a-zA-Z0-9_-]+)"/m);
   if (!crateMatch) throw new Error('Could not read the Rust crate name from rust/Cargo.toml.');
   const crateName = crateMatch[1];
-  const releasePath = (target) => path.join(rustRoot, 'target', target, 'release', `lib${crateName}.a`);
+  const releasePath = (target: string) => path.join(rustRoot, 'target', target, 'release', `lib${crateName}.a`);
 
   if (platform === 'ios') {
     for (const target of iosTargets) {
@@ -290,13 +305,3 @@ function build(platform) {
   }
   throw new Error('Choose a build target: ios or android.');
 }
-
-module.exports = {
-  run,
-  readJson,
-  packageRoot,
-  init,
-  generate,
-  doctor,
-  build,
-};

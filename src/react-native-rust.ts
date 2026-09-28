@@ -1,9 +1,13 @@
 #!/usr/bin/env node
 
-const { init, generate, doctor, build } = require('./react-native-rust-lib');
-const { appModuleRoot, initApp, inDirectory, runCodegen } = require('./app');
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { init, generate, doctor, build } from './react-native-rust-lib';
+import { appModuleRoot, initApp, inDirectory, runCodegen } from './app';
 
-function printHelp() {
+/** Prints the CLI's top-level usage help to stdout. */
+function printHelp(): void {
   console.log(`react-native-rust - Rust helper for React Native C++ TurboModule libraries
 
 Usage:
@@ -20,11 +24,8 @@ Create a library first with the C++ module template from:
   npx create-react-native-library@latest`);
 }
 
-function createProject(projectName) {
-  const { spawnSync } = require('node:child_process');
-  const fs = require('node:fs');
-  const path = require('node:path');
-
+/** Scaffolds a new React Native library with `create-react-native-library`, then runs `init` in it. */
+function createProject(projectName: string | undefined): void {
   if (!projectName || projectName.startsWith('-') || path.basename(projectName) !== projectName) {
     throw new Error('Usage: react-native-rust create <library-name>');
   }
@@ -60,7 +61,8 @@ function createProject(projectName) {
   console.log(`Created ${projectName}. Next run \`cd ${projectName} && yarn install\`.`);
 }
 
-function main(args) {
+/** Parses argv and dispatches to the matching command. Library-mode commands run in place; app-local commands run inside `native/rust-module/`. */
+function main(args: string[]): void {
   const [command, option] = args;
   if (!command || command === '--help' || command === '-h') return printHelp();
   if (command === 'create') return createProject(option);
@@ -82,7 +84,8 @@ function main(args) {
     if (option && option !== 'ios' && option !== 'android') {
       throw new Error('Choose a doctor target: ios or android.');
     }
-    return appModule ? inDirectory(appModule, () => doctor(option)) : doctor(option);
+    const target = option as 'ios' | 'android' | undefined;
+    return appModule ? inDirectory(appModule, () => doctor(target)) : doctor(target);
   }
   if (command === 'build') {
     if (!appModule) return build(option);
@@ -95,6 +98,6 @@ function main(args) {
 try {
   main(process.argv.slice(2));
 } catch (error) {
-  console.error(`Error: ${error.message}`);
+  console.error(`Error: ${(error as Error).message}`);
   process.exitCode = 1;
 }

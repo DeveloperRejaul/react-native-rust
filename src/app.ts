@@ -1,13 +1,14 @@
-const fs = require('node:fs');
-const path = require('node:path');
-const { spawnSync } = require('node:child_process');
-const { init: initLibrary, readJson } = require('./react-native-rust-lib');
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { init as initLibrary, readJson } from './react-native-rust-lib';
 
 const moduleDirectory = path.join('native', 'rust-module');
 const moduleName = 'RustApp';
 const packageName = 'rust-app-native-module';
 
-function writeFiles(root, files) {
+/** Writes a map of relative path to file contents under `root`, creating parent directories as needed. */
+function writeFiles(root: string, files: Record<string, string>): void {
   for (const [relativePath, contents] of Object.entries(files)) {
     const outputPath = path.join(root, relativePath);
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
@@ -15,7 +16,8 @@ function writeFiles(root, files) {
   }
 }
 
-function scaffoldFiles(appName) {
+/** Builds the initial file set for a new app-local Rust TurboModule package, with a `multiply` demo Spec. */
+function scaffoldFiles(appName: string): Record<string, string> {
   const javaPackageName = appName
     .replace(/([a-z0-9])([A-Z])/g, '$1.$2')
     .replace(/[^a-zA-Z0-9]+/g, '.')
@@ -158,12 +160,14 @@ using namespace facebook::react;
   };
 }
 
-function appModuleRoot(appRoot = process.cwd()) {
+/** Returns the app-local Rust module's root directory if `init --app` has already run there, else `null`. */
+export function appModuleRoot(appRoot: string = process.cwd()): string | null {
   const moduleRoot = path.join(appRoot, moduleDirectory);
   return fs.existsSync(path.join(moduleRoot, 'rust', 'Cargo.toml')) ? moduleRoot : null;
 }
 
-function inDirectory(directory, callback) {
+/** Runs `callback` with the process's working directory temporarily changed to `directory`. */
+export function inDirectory<T>(directory: string, callback: () => T): T {
   const previousDirectory = process.cwd();
   process.chdir(directory);
   try {
@@ -173,7 +177,8 @@ function inDirectory(directory, callback) {
   }
 }
 
-function runCodegen(appRoot, moduleRoot) {
+/** Invokes React Native's own Codegen script so the app-local module's generated native code stays current. */
+export function runCodegen(appRoot: string, moduleRoot: string): void {
   const script = path.join(appRoot, 'node_modules', 'react-native', 'scripts', 'generate-codegen-artifacts.js');
   if (!fs.existsSync(script)) {
     throw new Error('React Native dependencies are missing. Install the app dependencies, then run `react-native-rust generate`.');
@@ -188,7 +193,13 @@ function runCodegen(appRoot, moduleRoot) {
   }
 }
 
-function initApp() {
+/**
+ * Scaffolds a private, app-local Rust TurboModule package under `native/rust-module/` inside
+ * an existing React Native Community CLI app, wires it up as a local file: dependency, adds
+ * `rust:*` npm scripts, and runs Codegen once to produce its initial generated native code.
+ * Rolls back (removes the module directory) if any step fails.
+ */
+export function initApp(): void {
   const appRoot = process.cwd();
   const appManifestPath = path.join(appRoot, 'package.json');
   if (!fs.existsSync(appManifestPath)) throw new Error('Run `react-native-rust init --app` from a React Native app root.');
@@ -213,7 +224,7 @@ function initApp() {
       : `file:${path.relative(appRoot, cliRoot).split(path.sep).join('/') || '.'}`;
     const moduleManifestPath = path.join(moduleRoot, 'package.json');
     const moduleManifest = readJson(moduleManifestPath);
-    delete moduleManifest.devDependencies?.[cliManifest.name];
+    delete moduleManifest.devDependencies?.[cliManifest.name as string];
     fs.writeFileSync(moduleManifestPath, `${JSON.stringify(moduleManifest, null, 2)}\n`);
 
     appManifest.dependencies = {
@@ -222,7 +233,7 @@ function initApp() {
     };
     appManifest.devDependencies = {
       ...appManifest.devDependencies,
-      [cliManifest.name]: appManifest.devDependencies?.[cliManifest.name] || cliDependency,
+      [cliManifest.name as string]: appManifest.devDependencies?.[cliManifest.name as string] || cliDependency,
     };
     appManifest.scripts = {
       ...appManifest.scripts,
@@ -241,5 +252,3 @@ function initApp() {
   console.log(`Created app-local Rust TurboModule in ${path.relative(appRoot, moduleRoot)}.`);
   console.log('Install app dependencies, then run `npm run rust:build:android` or `npm run rust:build:ios`.');
 }
-
-module.exports = { appModuleRoot, initApp, inDirectory, runCodegen };

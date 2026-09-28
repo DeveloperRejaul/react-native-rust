@@ -4,8 +4,17 @@ Generate Rust functions and native bindings from a React Native TurboModule Type
 
 The CLI currently targets the **C++ TurboModule** template created by [`create-react-native-library`](https://www.npmjs.com/package/create-react-native-library).
 
+## Screenshots
+
+The generated [`react-native-awesome-library-example`](react-native-awesome-library-example) app calling every generated method and rendering its live Rust result, on both platforms:
+
+| Android | iOS |
+| --- | --- |
+| ![Android screenshot](doc/screenshots/android.png) | ![iOS screenshot](doc/screenshots/ios.png) |
+
 ## Contents
 
+- [Screenshots](#screenshots)
 - [Requirements](#requirements)
 - [Create a library](#create-a-library)
 - [Add Rust functions](#add-rust-functions)
@@ -43,10 +52,10 @@ cd react-native-awesome-library
 yarn install
 ```
 
-To run the CLI from its source checkout before publishing, use the checkout's path from the desired parent folder:
+To run the CLI from its source checkout before publishing, build it once (`npm run build` from the checkout root), then invoke the compiled output by path from the desired parent folder:
 
 ```sh
-node /path/to/rust_to_cpp/bin/react-native-rust.js create react-native-awesome-library
+node /path/to/rust_to_cpp/dist/react-native-rust.js create react-native-awesome-library
 ```
 
 To add Rust support to an existing C++ TurboModule library, install the CLI and initialize it from that library's root:
