@@ -4,9 +4,9 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { afterEach, test } = require('node:test');
-const { build } = require('../bin/react-native-rust-lib.js');
+const { build } = require('../dist/react-native-rust-lib.js');
 
-const cliPath = path.resolve(__dirname, '../bin/react-native-rust.js');
+const cliPath = path.resolve(__dirname, '../dist/react-native-rust.js');
 const temporaryDirectories = [];
 
 function createLibrary({ cppModule = true, scripts = {} } = {}) {
@@ -33,6 +33,39 @@ function createLibrary({ cppModule = true, scripts = {} } = {}) {
     fs.writeFileSync(path.join(directory, 'android/CMakeLists.txt'), 'add_library(\n  react_native_rust_demo\n  STATIC\n  ../cpp/RustDemoImpl.cpp\n)\n\ntarget_link_libraries(\n  react_native_rust_demo\n  jsi\n  reactnative\n)\n');
     fs.writeFileSync(path.join(directory, 'RustDemo.podspec'), 'Pod::Spec.new do |s|\n  s.source_files = "cpp/**/*.{h,cpp}"\nend\n');
   }
+  return directory;
+}
+
+function createReactNativeApp() {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'react-native-rust-app-'));
+  temporaryDirectories.push(directory);
+  fs.writeFileSync(path.join(directory, 'package.json'), JSON.stringify({
+    name: 'rust-app-fixture',
+    dependencies: { 'react-native': '0.86.2' },
+    devDependencies: {},
+    scripts: {},
+  }));
+  for (const folder of ['android', 'ios', 'node_modules/react-native/scripts']) {
+    fs.mkdirSync(path.join(directory, folder), { recursive: true });
+  }
+  fs.writeFileSync(
+    path.join(directory, 'node_modules/react-native/scripts/generate-codegen-artifacts.js'),
+    [
+      '#!/usr/bin/env node',
+      "const fs = require('node:fs');",
+      "const path = require('node:path');",
+      "const projectRoot = process.argv[process.argv.indexOf('-p') + 1];",
+      "const config = require(path.join(projectRoot, 'package.json')).codegenConfig;",
+      "for (const platform of ['android', 'ios']) {",
+      '  const outputPath = path.join(projectRoot, config.outputDir[platform]);',
+      "  const generatedPath = platform === 'android' ? path.join(outputPath, 'jni', 'CMakeLists.txt') : path.join(outputPath, 'ReactCodegen', 'RustAppSpecJSI.h');",
+      "  fs.mkdirSync(path.dirname(generatedPath), { recursive: true });",
+      "  fs.writeFileSync(generatedPath, 'generated');",
+      '}',
+      "fs.writeFileSync(path.join(projectRoot, 'codegen-ran'), 'yes');",
+      '',
+    ].join('\n'),
+  );
   return directory;
 }
 
@@ -139,6 +172,33 @@ test('init scaffolds Rust handlers from methods in the TurboModule Spec', () => 
   assert.match(fs.readFileSync(path.join(directory, '.gitignore'), 'utf8'), /rust\/build\//);
 });
 
+test('init --app creates an app-local Rust TurboModule and app commands regenerate it', () => {
+  const directory = createReactNativeApp();
+  const result = runCli(directory, 'init', '--app');
+  assert.equal(result.status, 0, result.stderr);
+
+  const moduleRoot = path.join(directory, 'native/rust-module');
+  const appManifest = JSON.parse(fs.readFileSync(path.join(directory, 'package.json'), 'utf8'));
+  const moduleManifest = JSON.parse(fs.readFileSync(path.join(moduleRoot, 'package.json'), 'utf8'));
+  assert.equal(appManifest.dependencies['rust-app-native-module'], 'file:./native/rust-module');
+  assert.equal(appManifest.scripts['rust:build:android'], 'react-native-rust build android');
+  assert.equal(moduleManifest.codegenConfig.name, 'RustAppSpec');
+  assert.match(fs.readFileSync(path.join(moduleRoot, 'rust/src/api/multiply.rs'), 'utf8'), /pub fn multiply\(a: f64, b: f64\)/);
+  assert.match(fs.readFileSync(path.join(moduleRoot, 'cpp/RustAppImpl.cpp'), 'utf8'), /rnrs_multiply/);
+  const androidCmake = fs.readFileSync(path.join(moduleRoot, 'android/CMakeLists.txt'), 'utf8');
+  assert.match(androidCmake, /CXX_STANDARD 20/);
+  assert.match(androidCmake, /react_codegen_RustAppSpec/);
+  assert.equal(fs.existsSync(path.join(moduleRoot, 'android/generated/jni/CMakeLists.txt')), true);
+  assert.equal(fs.existsSync(path.join(moduleRoot, 'ios/generated/ReactCodegen/RustAppSpecJSI.h')), true);
+  assert.equal(fs.existsSync(path.join(moduleRoot, 'codegen-ran')), true);
+
+  const regenerate = runCli(directory, 'generate');
+  assert.equal(regenerate.status, 0, regenerate.stderr);
+  const repeatedInit = runCli(directory, 'init', '--app');
+  assert.notEqual(repeatedInit.status, 0);
+  assert.match(repeatedInit.stderr, /already exists; no files were changed/);
+});
+
 test('generate maps boolean and void methods and preserves Rust handler logic', () => {
   const directory = createLibrary();
   assert.equal(runCli(directory, 'init').status, 0);
@@ -193,7 +253,7 @@ test('generate preserves string, array, and UnsafeObject return types across bin
         '  scale(values: number[]): number[];',
         '  record(value: CodegenTypes.UnsafeObject): CodegenTypes.UnsafeObject;',
         '  calculate(value: number): Promise<number>;',
-        '  inspect(value: CodegenTypes.UnsafeObject, callback: (label: string, score: number) => void): void;',
+        '  inspect(\n    value: CodegenTypes.UnsafeObject,\n    callback: (label: string, score: number) => void\n  ): void;',
       ].join('\n'),
     );
   fs.writeFileSync(specPath, spec);
@@ -212,8 +272,15 @@ test('generate preserves string, array, and UnsafeObject return types across bin
   assert.match(cpp, /static_cast<const jsi::Value\*>\(arguments\.data\(\)\)/);
   assert.match(native, /declare namespace CodegenTypes \{ type UnsafeObject = object; \}/);
   assert.match(fallback, /declare namespace CodegenTypes \{ type UnsafeObject = object; \}/);
+  const callbackPath = path.join(directory, 'rust/src/api/inspect.rs');
+  const callbackHandler = fs.readFileSync(callbackPath, 'utf8').replace(
+    'pub fn inspect(value: serde_json::Value, callback: &mut dyn FnMut(String, f64)) -> () {',
+    'pub fn inspect(\n    value: serde_json::Value,\n    callback: &mut dyn FnMut(String, f64),\n) -> () {',
+  );
+  fs.writeFileSync(callbackPath, callbackHandler);
   const regenerated = runCli(directory, 'generate');
   assert.equal(regenerated.status, 0, regenerated.stderr);
+  assert.match(fs.readFileSync(callbackPath, 'utf8'), /callback: &mut dyn FnMut\(String, f64\),\n\) -> \(\)/);
 });
 
 test('generate rejects unsupported TypeScript types without changing generated files', () => {

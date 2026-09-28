@@ -64,5 +64,8 @@ jobs:
       - name: Update npm for trusted publishing
         run: npm install --global npm@latest
 
+      - name: Install npm dependencies
+        run: npm ci
+
       - name: Publish with provenance
         run: npm publish --access public --provenance
