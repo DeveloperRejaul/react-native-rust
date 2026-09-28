@@ -6,11 +6,11 @@ The CLI currently targets the **C++ TurboModule** template created by [`create-r
 
 ## Screenshots
 
-The generated [`react-native-awesome-library-example`](react-native-awesome-library-example) app calling every generated method and rendering its live Rust result, on both platforms:
+The generated [`react-native-awesome-library-example`](react-native-awesome-library-example) app calling every generated method and rendering its live Rust result, on all three platforms:
 
-| Android | iOS |
-| --- | --- |
-| ![Android screenshot](doc/screenshots/android.png) | ![iOS screenshot](doc/screenshots/ios.png) |
+| Android | iOS | Web |
+| --- | --- | --- |
+| ![Android screenshot](doc/screenshots/android.png) | ![iOS screenshot](doc/screenshots/ios.png) | ![Web screenshot](doc/screenshots/web.png) |
 
 ## Contents
 
@@ -34,6 +34,7 @@ The generated [`react-native-awesome-library-example`](react-native-awesome-libr
 - Rust stable (`rustup`, `cargo`).
 - Android builds: Android SDK/NDK and `cargo-ndk`.
 - iOS builds: macOS, Xcode command-line tools, and the Rust Apple targets.
+- Web builds (`react-native-web`): [`wasm-pack`](https://rustwasm.github.io/wasm-pack/) and the `wasm32-unknown-unknown` Rust target (`rustup target add wasm32-unknown-unknown`).
 
 ## Create a library
 
@@ -194,6 +195,30 @@ Rust outputs are written under `rust/build/` and included in the generated libra
 
 The example screen in `example/src/App.tsx` exercises the supported scalar, JSON, Promise, and callback signatures.
 
+### Web
+
+Install `wasm-pack` and the `wasm32-unknown-unknown` target once:
+
+```sh
+cargo install wasm-pack
+rustup target add wasm32-unknown-unknown
+```
+
+Build the WebAssembly package:
+
+```sh
+yarn rust:build:web
+```
+
+This compiles `rust/` to `rust/build/web/pkg/` with `wasm-pack build --target web`, reusing the same `rust/src/api/<method>.rs` handlers as native — no separate implementation is needed. It replaces the generated `src/rust-generated.tsx` module (used by web bundlers that don't understand Metro's `.native.` file convention, such as Vite or webpack) with a real, WASM-backed implementation instead of the "not supported on native platforms" stub used before this module exists. Call and await its exported `initRustWeb()` once before using any generated function on web, since loading a `.wasm` file is asynchronous:
+
+```ts
+import { initRustWeb, multiply } from 'react-native-awesome-library';
+
+await initRustWeb();
+multiply(3, 7); // 21
+```
+
 ## Supported types
 
 The generator supports these TypeScript-to-Rust/C++ mappings:
@@ -213,6 +238,8 @@ Arrays and `UnsafeObject` values cross the native boundary as JSON, so their con
 
 Typed object structs, optional or rest parameters, destructured parameters, generic methods, and overloads are not supported. Unsupported signatures fail before generated files are changed.
 
+The same mappings apply on `react-native-web`: values cross as JSON strings via `wasm-bindgen` instead of the JSI C++ bridge, and callback parameters are passed as a JS function. See [Web](#web) for the build step and the async `initRustWeb()` call it requires.
+
 ## Publish
 
 Before publishing a generated React Native library, generate its TypeScript/native outputs and build the Rust artifacts for the platforms you intend to ship:
@@ -221,6 +248,7 @@ Before publishing a generated React Native library, generate its TypeScript/nati
 yarn prepare
 yarn rust:build:ios
 yarn rust:build:android
+yarn rust:build:web
 npm pack --dry-run
 ```
 
@@ -240,6 +268,8 @@ Pushing a version tag such as `v1.0.2` runs [`.github/workflows/publish.yml`](.g
 - Android CMake cannot find `android/generated/jni`: run `yarn prepare` from the library root.
 - Android CMake cannot find a Rust `.a` archive: run `yarn rust:build:android` before launching the example.
 - iOS reports a missing Rust XCFramework: run `yarn rust:build:ios`, then `pod install` in `example/ios`.
+- `wasm-pack: command not found`: install it with `cargo install wasm-pack`, or run `react-native-rust doctor web` to check both prerequisites.
+- The web app throws "Call and await initRustWeb()...": await `initRustWeb()` once before calling any other generated function; loading the `.wasm` file is asynchronous even though the generated calls are not.
 - A React Native type is reported as unsupported: check the mappings and signature restrictions in [Supported types](#supported-types).
 
 ## Contributing

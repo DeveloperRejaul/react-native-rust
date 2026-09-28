@@ -82,9 +82,17 @@ pub extern "C" fn rnrs_buffer_free(buffer: RustBuffer) {
 
 /** Emits the crate's `lib.rs`: the `#[no_mangle]` C ABI entry point for every Spec method. */
 export function renderRustExports(methods: MethodInfo[]): string {
-  const lines = ['mod api;', 'mod ffi;', 'pub use ffi::{rnrs_buffer_free, RustBuffer, RustCallback, RustSlice};', ''];
+  const lines = [
+    'mod api;',
+    'mod ffi;',
+    '#[cfg(target_arch = "wasm32")]',
+    'mod wasm;',
+    'pub use ffi::{rnrs_buffer_free, RustBuffer, RustCallback, RustSlice};',
+    '',
+  ];
   for (const method of methods) {
     const abiParams = method.params.map((param) => `${param.name}: ffi::${param.kind === 'callback' ? 'RustCallback' : 'RustSlice'}`).join(', ');
+    lines.push('#[cfg(not(target_arch = "wasm32"))]');
     lines.push('#[no_mangle]');
     lines.push(`pub extern "C" fn ${method.symbol}(${abiParams}) -> ffi::RustBuffer {`);
     lines.push('    ffi::catch_json(|| {');
@@ -131,8 +139,7 @@ export function renderRustHandler(method: MethodInfo): string {
   const returnType = method.returnType.promise ? `Result<${method.returnType.rust}, String>` : method.returnType.rust;
   const lines = [`// TODO: Replace the generated placeholder with the method implementation.`, `pub fn ${method.rustName}(${params}) -> ${returnType} {`];
   for (const param of method.params) {
-    if (param.kind === 'callback') lines.push(`    let _ = &mut ${param.name};`);
-    else lines.push(`    let _ = ${param.name};`);
+    lines.push(`    let _ = ${param.name};`);
   }
   if (method.returnType.promise) lines.push(`    Ok(${method.returnType.defaultValue})`);
   else if (method.returnType.defaultValue !== null) lines.push(`    ${method.returnType.defaultValue}`);
@@ -143,6 +150,60 @@ export function renderRustHandler(method: MethodInfo): string {
 /** Emits `rust/src/api/mod.rs`, declaring one module per Spec method's handler file. */
 export function renderRustModuleList(methods: MethodInfo[]): string {
   return `${methods.map((method) => `pub(crate) mod ${method.rustName};`).join('\n')}\n`;
+}
+
+/**
+ * Emits `rust/src/wasm.rs`: one `#[wasm_bindgen]` export per Spec method, only compiled for
+ * `wasm32` targets (see the `#[cfg(target_arch = "wasm32")] mod wasm;` line in `lib.rs`).
+ * Calls the same `api::<method>` handler used by the native C ABI, unchanged. Values cross the
+ * boundary as JSON strings, and callbacks are invoked directly as JS functions, both mirroring
+ * the native JSI bridge's conventions.
+ */
+export function renderRustWasmModule(methods: MethodInfo[]): string {
+  const lines = ['use wasm_bindgen::prelude::*;', ''];
+  for (const method of methods) {
+    const wasmParams = method.params.map((param) => (
+      param.kind === 'callback' ? `${param.name}: &js_sys::Function` : `${param.name}_json: &str`
+    )).join(', ');
+    const isVoidSync = method.returnType.kind === 'void' && !method.returnType.promise;
+    const wasmReturn = isVoidSync ? 'Result<(), JsValue>' : 'Result<String, JsValue>';
+
+    lines.push('#[wasm_bindgen]');
+    lines.push(`pub fn ${method.symbol}(${wasmParams}) -> ${wasmReturn} {`);
+    for (const param of method.params) {
+      if (param.kind === 'callback') continue;
+      lines.push(`    let ${param.name}: ${param.rust} = serde_json::from_str(${param.name}_json).map_err(|error| JsValue::from_str(&error.to_string()))?;`);
+    }
+    for (const param of method.params) {
+      if (param.kind !== 'callback') continue;
+      const callbackParams = param.params.map((callbackParam) => `${callbackParam.name}: ${callbackParam.rust}`).join(', ');
+      const callbackValues = param.params.map((callbackParam) => callbackParam.name).join(', ');
+      const encode = callbackValues.length === 0
+        ? 'String::from("[]")'
+        : `serde_json::to_string(&(${callbackValues}${param.params.length === 1 ? ',' : ''})).unwrap_or_default()`;
+      lines.push(`    let mut ${param.name}_callback = |${callbackParams}| {`);
+      lines.push(`        let payload = ${encode};`);
+      lines.push(`        let _ = ${param.name}.call1(&JsValue::NULL, &JsValue::from_str(&payload));`);
+      lines.push('    };');
+    }
+
+    const callArgs = method.params.map((param) => param.kind === 'callback' ? `&mut ${param.name}_callback` : param.name).join(', ');
+    const call = `crate::api::${method.rustName}::${method.rustName}(${callArgs})`;
+    if (method.returnType.promise) {
+      lines.push(`    let result = ${call};`);
+      lines.push('    result');
+      lines.push('        .map_err(|error| JsValue::from_str(&error))');
+      lines.push('        .and_then(|value| serde_json::to_string(&value).map_err(|error| JsValue::from_str(&error.to_string())))');
+    } else if (isVoidSync) {
+      lines.push(`    ${call};`);
+      lines.push('    Ok(())');
+    } else {
+      lines.push(`    let value = ${call};`);
+      lines.push('    serde_json::to_string(&value).map_err(|error| JsValue::from_str(&error.to_string()))');
+    }
+    lines.push('}', '');
+  }
+  return lines.join('\n');
 }
 
 /** Emits the hand-authored C++ helpers (JSON bridging, callback dispatch, Promise plumbing) shared by every generated module. */
@@ -322,10 +383,42 @@ export function renderCppMethods(methods: MethodInfo[], moduleName: string): { h
   };
 }
 
-/** Emits the TypeScript wrapper module pair: the native-backed export and the non-native fallback. */
-export function renderWrappers(methods: MethodInfo[], moduleName: string): { native: string; fallback: string } {
-  const nativeLines = [`import ${moduleName} from './Native${moduleName}';`, ''];
-  const fallbackLines: string[] = [];
+/**
+ * Emits the TypeScript wrapper module pair: the native-backed export (`.native.tsx`, resolved by
+ * Metro) and the WASM-backed web export (plain `.tsx`, resolved by web bundlers like Vite that
+ * don't understand the `.native.` convention). The web module loads the `wasm-pack --target web`
+ * output from `rust/build/web/pkg/` and must be initialized once via `initRustWeb()` before use,
+ * since loading a `.wasm` file is asynchronous even though the generated calls are not.
+ */
+export function renderWrappers(methods: MethodInfo[], moduleName: string, crateName: string): { native: string; web: string } {
+  const nativeLines = [
+    `import ${moduleName} from './Native${moduleName}';`,
+    '',
+    '/** No-op on native, where methods are always ready to call; matches the web module\'s async init so callers don\'t need to branch on platform. */',
+    'export function initRustWeb(): Promise<void> {',
+    '  return Promise.resolve();',
+    '}',
+    '',
+  ];
+  const webLines = [
+    `import wasmInit, * as rnrsWasm from '../rust/build/web/pkg/${crateName}.js';`,
+    '',
+    'let rnrsWasmReady = false;',
+    'let rnrsWasmInit: Promise<void> | null = null;',
+    '',
+    '/** Loads the compiled Rust WebAssembly module. Call and await this once before using this module on web. */',
+    'export function initRustWeb(wasmUrl?: string | URL): Promise<void> {',
+    '  if (!rnrsWasmInit) {',
+    '    rnrsWasmInit = wasmInit(wasmUrl).then(() => { rnrsWasmReady = true; });',
+    '  }',
+    '  return rnrsWasmInit;',
+    '}',
+    '',
+    'function rnrsRequireWasm(): void {',
+    `  if (!rnrsWasmReady) throw new Error('Call and await initRustWeb() before using ${moduleName} on web.');`,
+    '}',
+    '',
+  ];
   const usesUnsafeObject = methods.some((method) => (
     method.returnType.typescript.includes('UnsafeObject')
     || method.params.some((param) => param.typescript.includes('UnsafeObject'))
@@ -333,7 +426,7 @@ export function renderWrappers(methods: MethodInfo[], moduleName: string): { nat
   if (usesUnsafeObject) {
     const codegenTypesDeclaration = 'declare namespace CodegenTypes { type UnsafeObject = object; }';
     nativeLines.unshift(codegenTypesDeclaration);
-    fallbackLines.push(codegenTypesDeclaration, '');
+    webLines.unshift(codegenTypesDeclaration, '');
   }
   for (const method of methods) {
     const tsParams = method.params.map((param) => `${param.name}: ${param.typescript}`).join(', ');
@@ -343,12 +436,35 @@ export function renderWrappers(methods: MethodInfo[], moduleName: string): { nat
     nativeLines.push(method.returnType.typescript === 'void' ? `  ${nativeCall};` : `  return ${nativeCall};`);
     nativeLines.push('}', '');
 
-    const fallbackParams = method.params.map((param) => `_${param.name}: ${param.typescript}`).join(', ');
-    fallbackLines.push(`export function ${method.name}(${fallbackParams}): ${method.returnType.typescript} {`);
-    fallbackLines.push("  throw new Error('This method is only supported on native platforms.');", '}', '');
+    const wasmArgs = method.params.map((param) => (
+      param.kind === 'callback'
+        ? `(rnrsPayload: string) => { const rnrsArgs = JSON.parse(rnrsPayload); (${param.name} as (...rnrsCallbackArgs: any[]) => void)(...rnrsArgs); }`
+        : `JSON.stringify(${param.name})`
+    )).join(', ');
+    const wasmCall = `rnrsWasm.${method.symbol}(${wasmArgs})`;
+    webLines.push(`export function ${method.name}(${tsParams}): ${method.returnType.typescript} {`);
+    webLines.push('  rnrsRequireWasm();');
+    if (method.returnType.promise) {
+      webLines.push('  try {');
+      if (method.returnType.kind === 'void') {
+        webLines.push(`    ${wasmCall};`);
+        webLines.push('    return Promise.resolve();');
+      } else {
+        webLines.push(`    const rnrsResult = ${wasmCall};`);
+        webLines.push('    return Promise.resolve(JSON.parse(rnrsResult));');
+      }
+      webLines.push('  } catch (error) {');
+      webLines.push('    return Promise.reject(error instanceof Error ? error.message : String(error));');
+      webLines.push('  }');
+    } else if (method.returnType.kind === 'void') {
+      webLines.push(`  ${wasmCall};`);
+    } else {
+      webLines.push(`  return JSON.parse(${wasmCall});`);
+    }
+    webLines.push('}', '');
   }
   return {
     native: nativeLines.join('\n'),
-    fallback: fallbackLines.join('\n'),
+    web: webLines.join('\n'),
   };
 }

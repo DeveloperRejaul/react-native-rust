@@ -27,7 +27,19 @@
     "type": "git",
     "url": "git+https://github.com/DeveloperRejaul/react-native-rust.git"
   },
-  "keywords": [],
+  "keywords": [
+    "react-native",
+    "rust",
+    "typescript",
+    "turbomodule",
+    "codegen",
+    "cli",
+    "ios",
+    "android",
+    "jsi",
+    "cpp",
+    "ffi"
+  ],
   "author": "",
   "license": "ISC",
   "bugs": {

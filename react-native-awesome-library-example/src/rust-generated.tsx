@@ -1,38 +1,68 @@
 declare namespace CodegenTypes { type UnsafeObject = object; }
 
-export function multiply(_a: number, _b: number): number {
-  throw new Error('This method is only supported on native platforms.');
+import wasmInit, * as rnrsWasm from '../rust/build/web/pkg/react_native_awesome_library.js';
+
+let rnrsWasmReady = false;
+let rnrsWasmInit: Promise<void> | null = null;
+
+/** Loads the compiled Rust WebAssembly module. Call and await this once before using this module on web. */
+export function initRustWeb(wasmUrl?: string | URL): Promise<void> {
+  if (!rnrsWasmInit) {
+    rnrsWasmInit = wasmInit(wasmUrl).then(() => { rnrsWasmReady = true; });
+  }
+  return rnrsWasmInit;
 }
 
-export function subtract(_a: number, _b: number): number {
-  throw new Error('This method is only supported on native platforms.');
+function rnrsRequireWasm(): void {
+  if (!rnrsWasmReady) throw new Error('Call and await initRustWeb() before using AwesomeLibrary on web.');
 }
 
-export function isPositive(_value: number): boolean {
-  throw new Error('This method is only supported on native platforms.');
+export function multiply(a: number, b: number): number {
+  rnrsRequireWasm();
+  return JSON.parse(rnrsWasm.rnrs_multiply(JSON.stringify(a), JSON.stringify(b)));
 }
 
-export function greet(_name: string): string {
-  throw new Error('This method is only supported on native platforms.');
+export function subtract(a: number, b: number): number {
+  rnrsRequireWasm();
+  return JSON.parse(rnrsWasm.rnrs_subtract(JSON.stringify(a), JSON.stringify(b)));
 }
 
-export function scaleValues(_values: number[]): number[] {
-  throw new Error('This method is only supported on native platforms.');
+export function isPositive(value: number): boolean {
+  rnrsRequireWasm();
+  return JSON.parse(rnrsWasm.rnrs_is_positive(JSON.stringify(value)));
 }
 
-export function annotateObject(_value: CodegenTypes.UnsafeObject): CodegenTypes.UnsafeObject {
-  throw new Error('This method is only supported on native platforms.');
+export function greet(name: string): string {
+  rnrsRequireWasm();
+  return JSON.parse(rnrsWasm.rnrs_greet(JSON.stringify(name)));
 }
 
-export function calculateAsync(_value: number): Promise<number> {
-  throw new Error('This method is only supported on native platforms.');
+export function scaleValues(values: number[]): number[] {
+  rnrsRequireWasm();
+  return JSON.parse(rnrsWasm.rnrs_scale_values(JSON.stringify(values)));
 }
 
-export function inspectWithCallback(_value: CodegenTypes.UnsafeObject, _callback: (
+export function annotateObject(value: CodegenTypes.UnsafeObject): CodegenTypes.UnsafeObject {
+  rnrsRequireWasm();
+  return JSON.parse(rnrsWasm.rnrs_annotate_object(JSON.stringify(value)));
+}
+
+export function calculateAsync(value: number): Promise<number> {
+  rnrsRequireWasm();
+  try {
+    const rnrsResult = rnrsWasm.rnrs_calculate_async(JSON.stringify(value));
+    return Promise.resolve(JSON.parse(rnrsResult));
+  } catch (error) {
+    return Promise.reject(error instanceof Error ? error.message : String(error));
+  }
+}
+
+export function inspectWithCallback(value: CodegenTypes.UnsafeObject, callback: (
       label: string,
       score: number,
       active: boolean,
       details: CodegenTypes.UnsafeObject
     ) => void): void {
-  throw new Error('This method is only supported on native platforms.');
+  rnrsRequireWasm();
+  rnrsWasm.rnrs_inspect_with_callback(JSON.stringify(value), (rnrsPayload: string) => { const rnrsArgs = JSON.parse(rnrsPayload); (callback as (...rnrsCallbackArgs: any[]) => void)(...rnrsArgs); });
 }
