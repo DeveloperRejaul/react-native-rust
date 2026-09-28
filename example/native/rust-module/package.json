@@ -1,0 +1,43 @@
+{
+  "name": "rust-app-native-module",
+  "version": "0.0.1",
+  "description": "App-local Rust TurboModule",
+  "main": "src/index.tsx",
+  "react-native": "src/index.tsx",
+  "types": "src/index.tsx",
+  "files": [
+    "src/",
+    "cpp/",
+    "android/",
+    "ios/",
+    "*.podspec",
+    "react-native.config.js",
+    "rust/",
+    "rust/build/",
+    "rust/include/"
+  ],
+  "peerDependencies": {
+    "react": "*",
+    "react-native": ">=0.76"
+  },
+  "codegenConfig": {
+    "name": "RustAppSpec",
+    "type": "modules",
+    "jsSrcsDir": "src",
+    "outputDir": {
+      "ios": "ios/generated",
+      "android": "android/generated"
+    },
+    "android": {
+      "javaPackageName": "rust.app.example"
+    },
+    "includesGeneratedCode": true
+  },
+  "devDependencies": {},
+  "scripts": {
+    "rust:test": "cargo test --manifest-path rust/Cargo.toml",
+    "rust:generate": "react-native-rust generate",
+    "rust:build:ios": "react-native-rust build ios",
+    "rust:build:android": "react-native-rust build android"
+  }
+}

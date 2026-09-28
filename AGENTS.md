@@ -4,12 +4,15 @@
 
 This project is a helping tool for developing Rust libraries that can be used from React Native. Improve the developer workflow for writing Rust APIs, exposing them safely across the native boundary, building for mobile targets, and integrating the results into React Native apps. Keep the tooling approachable and make its supported platforms and generated outputs clear.
 
-The repository is an npm CLI for React Native library authors. It targets the C++ TurboModule template from `create-react-native-library`; it parses methods in the TypeScript `Spec`, scaffolds Rust handler functions, emits matching C ABI and C++/TypeScript glue, and configures iOS/Android linking. The requested type surface is number/f64, boolean/bool, string, JSON-safe arrays and `CodegenTypes.UnsafeObject`, Promise returns over supported payload types, and synchronous callback parameters with supported payload types. Reject typed object structs, nested promises, callbacks retained past the native call, callbacks in Promise methods, and all other unsupported signatures until their ABI and lifecycle are implemented and tested. Do not claim unsupported type mappings or broader React Native integration are complete.
+The repository is an npm CLI for React Native library authors and app developers. It targets C++ TurboModules: it parses methods in a TypeScript `Spec`, scaffolds Rust handler functions, emits matching C ABI and C++/TypeScript glue, and configures iOS/Android linking. Library mode initializes an existing C++ TurboModule library. App mode (`init --app`) adds a private local TurboModule package to an existing React Native Community CLI app with both Android and iOS projects. The requested type surface is number/f64, boolean/bool, string, JSON-safe arrays and `CodegenTypes.UnsafeObject`, Promise returns over supported payload types, and synchronous callback parameters with supported payload types. Reject typed object structs, nested promises, callbacks retained past the native call, callbacks in Promise methods, and all other unsupported signatures until their ABI and lifecycle are implemented and tested. Do not claim unsupported type mappings or broader React Native integration are complete.
 
 ## Current Structure
 
 - `bin/react-native-rust.js`: npm CLI for initializing Rust and generating/building mobile bindings.
 - `bin/codegen.js`: TypeScript `Spec` parser and Rust/C++/TypeScript scaffold generator.
+- `bin/app.js`: app-local TurboModule scaffolding and React Native Codegen integration.
+- `example/`: React Native CLI app used to exercise app-local Rust mode.
+- `react-native-awesome-library-example/`: generated C++ TurboModule library (library mode output) with its own `example/` app exercising the full supported type surface, including Promise and callback methods.
 - `test/cli.test.js`: Node tests for CLI setup behavior.
 - `package.json`: npm package metadata and CLI test command.
 - `README.md`: setup, usage, and platform documentation.

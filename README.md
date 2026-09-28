@@ -9,6 +9,7 @@ The CLI currently targets the **C++ TurboModule** template created by [`create-r
 - [Requirements](#requirements)
 - [Create a library](#create-a-library)
 - [Add Rust functions](#add-rust-functions)
+- [Use Rust in an app](#use-rust-in-an-app)
 - [Build and run](#build-and-run)
 - [Supported types](#supported-types)
 - [Publish](#publish)
@@ -88,6 +89,40 @@ Run Rust tests with:
 ```sh
 yarn rust:test
 ```
+
+## Use Rust in an app
+
+For app-specific Rust code, run the CLI from the root of an existing React Native Community CLI app that has both `android/` and `ios/` folders:
+
+```sh
+npx react-native-rust init --app
+npm install
+```
+
+The command creates a private local TurboModule package in `native/rust-module/`, adds it to the app as a local dependency, and generates its C++ bridge and Rust crate. It does not publish a separate library. App-local mode currently supports C++ TurboModule apps with both Android and iOS projects.
+
+Edit `native/rust-module/src/NativeRustApp.ts` to declare methods, then implement their generated handlers under `native/rust-module/rust/src/api/`. From the app root, regenerate the bindings and React Native Codegen output with:
+
+```sh
+npm run rust:generate
+```
+
+Build the Rust archive for the target platform, then build and launch the React Native app:
+
+```sh
+npm run rust:build:android
+npx react-native run-android
+```
+
+For iOS, build the XCFramework, install Pods, then launch the app:
+
+```sh
+npm run rust:build:ios
+cd ios && pod install && cd ..
+npx react-native run-ios
+```
+
+The generated module is app-local and can be used from the app's JavaScript imports. The root `example/` project in this repository exercises this workflow.
 
 ## Build and run
 

@@ -78,7 +78,7 @@ function updateCppFile(source, markers, generated, templateMethod, methodNeedle,
 }
 
 function normalizeSignature(text) {
-  return text.replace(/\s+/g, '');
+  return text.replace(/\s+/g, '').replace(/,\)/g, ')');
 }
 
 function validateExistingHandler(filePath, method) {

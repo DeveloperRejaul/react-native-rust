@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const { init, generate, doctor, build } = require('./react-native-rust-lib');
+const { appModuleRoot, initApp, inDirectory, runCodegen } = require('./app');
 
 function printHelp() {
   console.log(`react-native-rust - Rust helper for React Native C++ TurboModule libraries
@@ -8,6 +9,7 @@ function printHelp() {
 Usage:
   react-native-rust create <name>  Create a React Native library and initialize Rust support
   react-native-rust init             Add Rust support and generate functions from the Spec interface
+  react-native-rust init --app       Add app-local Rust support to a React Native app
   react-native-rust generate         Regenerate Rust, C++, and TypeScript glue from Spec
   react-native-rust doctor [target]  Check Rust and optional ios/android prerequisites
   react-native-rust build ios        Build an iOS XCFramework
@@ -62,15 +64,31 @@ function main(args) {
   const [command, option] = args;
   if (!command || command === '--help' || command === '-h') return printHelp();
   if (command === 'create') return createProject(option);
-  if (command === 'init') return init();
-  if (command === 'generate') return generate();
+  if (command === 'init') {
+    if (option === '--app') return initApp();
+    if (option) throw new Error('Use `react-native-rust init --app` for an app, or run `react-native-rust init` from a C++ TurboModule library.');
+    return init();
+  }
+  const appRoot = process.cwd();
+  const appModule = appModuleRoot(appRoot);
+  if (command === 'generate') {
+    if (!appModule) return generate();
+    return inDirectory(appModule, () => {
+      generate();
+      runCodegen(appRoot, appModule);
+    });
+  }
   if (command === 'doctor') {
     if (option && option !== 'ios' && option !== 'android') {
       throw new Error('Choose a doctor target: ios or android.');
     }
-    return doctor(option);
+    return appModule ? inDirectory(appModule, () => doctor(option)) : doctor(option);
   }
-  if (command === 'build') return build(option);
+  if (command === 'build') {
+    if (!appModule) return build(option);
+    runCodegen(appRoot, appModule);
+    return inDirectory(appModule, () => build(option));
+  }
   throw new Error(`Unknown command: ${command}. Run react-native-rust --help for usage.`);
 }
 
