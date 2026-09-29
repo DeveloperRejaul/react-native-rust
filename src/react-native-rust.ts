@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { init, generate, doctor, build } from './react-native-rust-lib';
+import { init, generate, doctor, build, watch } from './react-native-rust-lib';
 import { appModuleRoot, initApp, inDirectory, runCodegen } from './app';
 
 /** Prints the CLI's top-level usage help to stdout. */
@@ -19,6 +19,7 @@ Usage:
   react-native-rust build ios        Build an iOS XCFramework
   react-native-rust build android    Build Android static archives for supported ABIs
   react-native-rust build web        Build a WebAssembly package for react-native-web
+  react-native-rust watch            Watch the Spec and rust/ for changes and rebuild automatically
   react-native-rust --help           Show this help
 
 Create a library first with the C++ module template from:
@@ -92,6 +93,20 @@ function main(args: string[]): void {
     if (!appModule) return build(option);
     runCodegen(appRoot, appModule);
     return inDirectory(appModule, () => build(option));
+  }
+  if (command === 'watch') {
+    // The watcher runs for the life of the process, so (unlike the other app-local commands)
+    // it changes into the module directory permanently instead of restoring cwd afterward.
+    if (appModule) process.chdir(appModule);
+    const handle = watch(appModule ? { onGenerated: () => runCodegen(appRoot, appModule) } : {});
+    const shutdown = (signal: string): void => {
+      console.log(`\n[Rust] Received ${signal}, stopping watcher...`);
+      handle.stop().finally(() => process.exit(0));
+    };
+    process.on('SIGINT', () => shutdown('SIGINT'));
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    process.on('SIGHUP', () => shutdown('SIGHUP'));
+    return;
   }
   throw new Error(`Unknown command: ${command}. Run react-native-rust --help for usage.`);
 }

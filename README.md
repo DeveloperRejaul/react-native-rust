@@ -19,6 +19,7 @@ The generated [`react-native-awesome-library-example`](react-native-awesome-libr
 - [Create a library](#create-a-library)
 - [Add Rust functions](#add-rust-functions)
 - [Use Rust in an app](#use-rust-in-an-app)
+- [Automatic development mode](#automatic-development-mode)
 - [Build and run](#build-and-run)
 - [Supported types](#supported-types)
 - [Publish](#publish)
@@ -109,9 +110,20 @@ npx react-native-rust init --app
 npm install
 ```
 
-The command creates a private local TurboModule package in `native/rust-module/`, adds it to the app as a local dependency, and generates its C++ bridge and Rust crate. It does not publish a separate library. App-local mode currently supports C++ TurboModule apps with both Android and iOS projects.
+The command creates a private local TurboModule package in `.rust-native/` (hidden, generated C++/TurboModule glue only — never hand-edit it), and puts the Rust crate itself at the app's own root, `rust/`, alongside `android/` and `ios/`. It adds `.rust-native/` to the app as a local dependency and generates its C++ bridge. It does not publish a separate library. App-local mode currently supports C++ TurboModule apps with both Android and iOS projects.
 
-Edit `native/rust-module/src/NativeRustApp.ts` to declare methods, then implement their generated handlers under `native/rust-module/rust/src/api/`. From the app root, regenerate the bindings and React Native Codegen output with:
+```
+my-app/
+├── rust/                ← edit this: your Rust crate
+│   ├── Cargo.toml
+│   └── src/api/
+├── .rust-native/         ← generated TurboModule glue; do not edit
+├── android/
+├── ios/
+└── package.json
+```
+
+Edit `.rust-native/src/NativeRustApp.ts` to declare methods, then implement their generated handlers under `rust/src/api/`. From the app root, regenerate the bindings and React Native Codegen output with:
 
 ```sh
 npm run rust:generate
@@ -133,6 +145,44 @@ npx react-native run-ios
 ```
 
 The generated module is app-local and can be used from the app's JavaScript imports. The root `example/` project in this repository exercises this workflow.
+
+## Automatic development mode
+
+The commands above (`rust:generate`, `rust:build:*`) still work exactly as before and remain fully supported. For day-to-day development, `react-native-rust watch` runs instead, watching the `Spec` and `rust/` and reacting automatically:
+
+```
+Legacy workflow:  init → generate → build (repeated by hand after every change)
+New workflow:     init once → npx react-native-rust watch (or npx react-native start, with Metro integration below)
+```
+
+On every save, the watcher classifies the change and reacts accordingly, matching what a manual run of `generate`/`build` would already produce:
+
+- **A Rust file under `rust/src/`, or `Cargo.toml`/`Cargo.lock`, changes** (an implementation-only edit): it runs an incremental `cargo build` only. Native bindings are not regenerated.
+- **The `Spec` file changes** (a new method, or a signature change): it runs `generate()` first — preserving hand-written Rust handler bodies, exactly like running `rust:generate` by hand — and then `cargo build`.
+- Rapid successive saves are debounced and coalesced into one build; a build already in progress is never interrupted, and at most one more run is queued behind it.
+- A failed build or a failed code generation prints the error and keeps watching; it does not crash the process or leave stale generated files.
+
+Run it directly:
+
+```sh
+npx react-native-rust watch
+```
+
+Or wire it into Metro so `npx react-native start` runs it automatically:
+
+```js
+// metro.config.js
+const { getDefaultConfig, mergeConfig } = require('@react-native/metro-config');
+const { withRust } = require('@rejaul/react-native-rust/metro');
+
+module.exports = withRust(mergeConfig(getDefaultConfig(__dirname), {}));
+```
+
+`withRust()` detects your Rust project automatically at `rust/` (both library mode and app-local mode keep it at the project root) and adds it to `watchFolders`; pass `{ rustDir: './rust' }` only if your Rust project lives somewhere non-standard. It starts the watcher only while Metro's dev server is actually serving requests — never during a production/release bundle — and its `[Rust]`/`[RN Rust]` output streams into the same terminal as Metro's own. If Rust hasn't been initialized yet, it no-ops with a one-line notice instead of erroring, so it's safe to add before running `init`.
+
+If Metro integration isn't wired up (or doesn't fit your setup), run `npx react-native-rust watch` in a separate terminal alongside `npx react-native start` — it does the same thing standalone.
+
+**What this does not do:** Rust and C++ are native code. A running Android/iOS app cannot hot-swap a rebuilt native library the way Metro hot-swaps JavaScript. Each cycle rebuilds the Rust crate and prints a reminder that you still need to run `npm run rust:build:ios` / `rust:build:android` and reinstall the app to load the change on a simulator or device. A `Spec` change also regenerates `src/rust-generated.native.tsx`, which Metro's own JS watcher will pick up and Fast Refresh on its own, same as any other JS/TS change.
 
 ## Build and run
 
@@ -271,6 +321,9 @@ Pushing a version tag such as `v1.0.2` runs [`.github/workflows/publish.yml`](.g
 - `wasm-pack: command not found`: install it with `cargo install wasm-pack`, or run `react-native-rust doctor web` to check both prerequisites.
 - The web app throws "Call and await initRustWeb()...": await `initRustWeb()` once before calling any other generated function; loading the `.wasm` file is asynchronous even though the generated calls are not.
 - A React Native type is reported as unsupported: check the mappings and signature restrictions in [Supported types](#supported-types).
+- `react-native-rust watch` prints "Rust is not initialized": run `react-native-rust init` (or `init --app`) first; the watcher requires `rust/Cargo.toml` to exist.
+- Changes made in a running app never appear, even after "`[Rust] Build completed`": native code cannot hot-swap into a running process. Run `npm run rust:build:ios` / `rust:build:android` and reinstall the app, as [Automatic development mode](#automatic-development-mode) describes.
+- `npx react-native start` doesn't print any `[Rust]` lines: confirm `metro.config.js` calls `withRust(...)` and that `rust/Cargo.toml` exists at the project root; otherwise run `npx react-native-rust watch` in a separate terminal.
 
 ## Contributing
 

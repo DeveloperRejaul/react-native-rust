@@ -8,15 +8,17 @@ The repository is an npm CLI for React Native library authors and app developers
 
 ## Current Structure
 
-- `src/react-native-rust.ts`: npm CLI entry point for initializing Rust and generating/building mobile bindings.
-- `src/react-native-rust-lib.ts`: library-mode `init`/`generate`/`doctor`/`build` commands.
-- `src/app.ts`: app-local TurboModule scaffolding and React Native Codegen integration.
-- `src/codegen/`: TypeScript `Spec` parser and Rust/C++/TypeScript scaffold generator, with shared types in `src/codegen/types.ts`.
+- `src/react-native-rust.ts`: npm CLI entry point for initializing Rust and generating/building mobile bindings, including `watch`.
+- `src/react-native-rust-lib.ts`: library-mode `init`/`generate`/`doctor`/`build`/`watch` commands.
+- `src/app.ts`: app-local TurboModule scaffolding and React Native Codegen integration. Scaffolds a hidden, generated-only `.rust-native/` package (C++/TurboModule glue); the Rust crate itself (`rust/`) is created at the app's own root via `reactNativeRust.rustDir` in `.rust-native/package.json`, not inside `.rust-native/`.
+- `src/codegen/`: TypeScript `Spec` parser and Rust/C++/TypeScript scaffold generator, with shared types in `src/codegen/types.ts`. `project.ts` also resolves generated references to the Rust crate as relative paths (or, when the crate lives outside the generated package in app-local mode, as a real filesystem symlink placed at that package's own root — see `resolveOutsideReference`'s doc comment for why a plain `../` path breaks once the package is reached through an npm `file:` symlink in `node_modules`).
+- `src/dev/`: the `watch` command's watcher (`watcher.ts`, chokidar-based) and single-flight build queue (`buildQueue.ts`).
+- `src/metro.ts` (published at the package root as `metro.js`): `withRust()`, a Metro config wrapper that starts the Rust watcher automatically during `npx react-native start`.
 - `src/types.ts`: shared CLI-level types (package manifest shape, command results, etc.).
 - `dist/`: build output (`npm run build`, via esbuild); not committed to git. `npm run typecheck` runs `tsc` for type-checking only.
-- `example/`: React Native CLI app used to exercise app-local Rust mode.
+- `example/`: React Native CLI app used to exercise app-local Rust mode. Still uses the pre-`.rust-native` layout (`native/rust-module/`) from before that restructuring; not yet migrated.
 - `react-native-awesome-library-example/`: generated C++ TurboModule library (library mode output) with its own `example/` app exercising the full supported type surface, including Promise and callback methods.
-- `test/cli.test.js`: Node tests for CLI setup behavior.
+- `test/cli.test.js`: Node tests for CLI setup behavior. `test/watch.test.js` and `test/metro.test.js` cover the watcher/build-queue and `withRust()`.
 - `package.json`: npm package metadata and CLI test command.
 - `README.md`: setup, usage, and platform documentation.
 

@@ -1,8 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { parseSpec, renderProjectBindings, renderRustFfiModule } from './codegen';
+import { parseSpec, renderProjectBindings, renderRustFfiModule, resolveOutsideReference, toPosixRelative } from './codegen';
 import { CommandResult, PackageManifest, PackageRootInfo, RunOptions } from './types';
+import { watchRustProject, ChangeKind, WatchTarget } from './dev/watcher';
+import { SingleFlightQueue } from './dev/buildQueue';
 
 const rustDirectory = 'rust';
 const iosTargets = ['aarch64-apple-ios', 'aarch64-apple-ios-sim', 'x86_64-apple-ios'];
@@ -68,6 +70,16 @@ export function packageRoot(): PackageRootInfo {
   return { root, manifest, manifestPath, moduleName: moduleMatch[1] };
 }
 
+/**
+ * Resolves where the Rust crate lives: `manifest.reactNativeRust.rustDir` if set, else
+ * `<root>/rust`. App-local mode points this at the app's own root (outside `root`, which is the
+ * private local module package), so every generated reference to it is computed as a relative
+ * path rather than assumed to be a child of `root`.
+ */
+function resolveRustRoot(root: string, manifest: PackageManifest): string {
+  return path.resolve(root, manifest.reactNativeRust?.rustDir || rustDirectory);
+}
+
 /** Reads the Rust crate's package name from its `Cargo.toml` `[package] name` field. */
 function readCrateName(rustRoot: string): string {
   const manifestPath = path.join(rustRoot, 'Cargo.toml');
@@ -85,9 +97,9 @@ function readCrateName(rustRoot: string): string {
  */
 export function init(): void {
   const { root, manifest, manifestPath, moduleName } = packageRoot();
-  const rustPath = path.join(root, rustDirectory);
+  const rustPath = resolveRustRoot(root, manifest);
   if (fs.existsSync(rustPath)) {
-    throw new Error('The rust/ directory already exists; no files were changed.');
+    throw new Error(`${path.relative(root, rustPath) || 'rust'}/ already exists; no files were changed.`);
   }
   const scripts = manifest.scripts || {};
   if (scripts['rust:test'] || scripts['rust:generate']) {
@@ -128,16 +140,26 @@ export function init(): void {
     throw new Error('Could not locate the C++ target link block in android/CMakeLists.txt.');
   }
   const androidLink = `${linkMatch[0].slice(0, -2)}\n    rust_core\n    log\n    dl\n    m\n)`;
-  const rustImport = `add_library(rust_core STATIC IMPORTED)\nset_target_properties(rust_core PROPERTIES\n    IMPORTED_LOCATION "\${CMAKE_CURRENT_LIST_DIR}/../rust/build/android/\${ANDROID_ABI}/lib${crateDirName}.a"\n)\n\n`;
+  const androidRustBuildTarget = resolveOutsideReference(root, path.join(rustPath, 'build', 'android'), 'rust-build-android');
+  const androidRustBuildPath = toPosixRelative(path.join(root, 'android'), androidRustBuildTarget);
+  const rustImport = `add_library(rust_core STATIC IMPORTED)\nset_target_properties(rust_core PROPERTIES\n    IMPORTED_LOCATION "\${CMAKE_CURRENT_LIST_DIR}/${androidRustBuildPath}/\${ANDROID_ABI}/lib${crateDirName}.a"\n)\n\n`;
   const androidCmake = contents.androidCmake
     .replace(linkMatch[0], androidLink)
     .replace(/add_library\(/, `${rustImport}add_library(`);
 
   const podspecSource = contents.podspec.match(/^\s*s\.source_files\s*=.*$/m);
   if (!podspecSource) throw new Error('Could not locate source_files in the CocoaPods spec.');
+  // Unlike the CMake reference above, this can't point through a symlink: CocoaPods resolves
+  // `vendored_frameworks` in a way that silently drops it when reached through one (confirmed by
+  // a real build failing with unresolved Rust symbols), even though clang/CMake handle the same
+  // symlink correctly. So in app-local mode this instead names a plain subdirectory of this
+  // package, which `build ios` populates with a real copy of the built xcframework.
+  const iosRustBuildPath = toPosixRelative(root, path.join(rustPath, 'build', 'ios')).startsWith('..')
+    ? 'rust-build-ios'
+    : toPosixRelative(root, path.join(rustPath, 'build', 'ios'));
   const podspec = contents.podspec.replace(
     podspecSource[0],
-    `${podspecSource[0]}\n  s.vendored_frameworks = "rust/build/ios/${moduleName}Rust.xcframework"`,
+    `${podspecSource[0]}\n  s.vendored_frameworks = "${iosRustBuildPath}/${moduleName}Rust.xcframework"`,
   );
 
   const rustFiles: Record<string, string> = {
@@ -148,7 +170,7 @@ export function init(): void {
     'README.md': `# Rust core\n\nRust handlers are generated from the TurboModule Spec interface in src/Native${moduleName}.ts. Edit the generated functions under rust/src/api/ and regenerate native glue with npx react-native-rust generate.\n\nRun cargo test --manifest-path rust/Cargo.toml for Rust tests. Build iOS and Android artifacts with npx react-native-rust build ios and npx react-native-rust build android before native app builds. Build the react-native-web WebAssembly package with npx react-native-rust build web (requires wasm-pack and the wasm32-unknown-unknown Rust target).\n`,
   };
 
-  const updates = renderProjectBindings(root, moduleName, methods, true, crateDirName);
+  const updates = renderProjectBindings(root, moduleName, methods, true, crateDirName, rustPath);
   updates.set(projectFiles.androidCmake, androidCmake);
   updates.set(projectFiles.podspec, podspec);
   const cliManifest = readJson(path.join(__dirname, '..', 'package.json'));
@@ -165,27 +187,34 @@ export function init(): void {
     },
     scripts: {
       ...scripts,
-      'rust:test': 'cargo test --manifest-path rust/Cargo.toml',
+      'rust:test': `cargo test --manifest-path ${toPosixRelative(root, rustPath)}/Cargo.toml`,
       'rust:generate': 'react-native-rust generate',
       'rust:build:ios': 'react-native-rust build ios',
       'rust:build:android': 'react-native-rust build android',
       'rust:build:web': 'react-native-rust build web',
     },
   };
-  const packageFiles = Array.isArray(updatedManifest.files) ? [...updatedManifest.files] : [];
-  for (const filePath of ['rust/', 'rust/build/', 'rust/include/']) {
-    if (!packageFiles.includes(filePath)) packageFiles.push(filePath);
+  // `files`/`.gitignore` entries only make sense when rust/ is inside this package (library
+  // mode); app-local mode points rustPath outside root, and the app itself owns its .gitignore.
+  const rustIsInsideRoot = !toPosixRelative(root, rustPath).startsWith('..');
+  if (rustIsInsideRoot) {
+    const packageFiles = Array.isArray(updatedManifest.files) ? [...updatedManifest.files] : [];
+    for (const filePath of ['rust/', 'rust/build/', 'rust/include/']) {
+      if (!packageFiles.includes(filePath)) packageFiles.push(filePath);
+    }
+    updatedManifest.files = packageFiles;
   }
-  updatedManifest.files = packageFiles;
   updates.set(manifestPath, `${JSON.stringify(updatedManifest, null, 2)}\n`);
 
-  const gitignorePath = path.join(root, '.gitignore');
-  const gitignore = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, 'utf8') : '';
-  const ignoredRustOutputs = ['rust/target/', 'rust/build/']
-    .filter((entry) => !gitignore.split(/\r?\n/).includes(entry));
-  if (ignoredRustOutputs.length > 0) {
-    const separator = gitignore.length > 0 && !gitignore.endsWith('\n') ? '\n' : '';
-    updates.set(gitignorePath, `${gitignore}${separator}${ignoredRustOutputs.join('\n')}\n`);
+  if (rustIsInsideRoot) {
+    const gitignorePath = path.join(root, '.gitignore');
+    const gitignore = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, 'utf8') : '';
+    const ignoredRustOutputs = ['rust/target/', 'rust/build/']
+      .filter((entry) => !gitignore.split(/\r?\n/).includes(entry));
+    if (ignoredRustOutputs.length > 0) {
+      const separator = gitignore.length > 0 && !gitignore.endsWith('\n') ? '\n' : '';
+      updates.set(gitignorePath, `${gitignore}${separator}${ignoredRustOutputs.join('\n')}\n`);
+    }
   }
 
   for (const [relativePath, fileContents] of Object.entries(rustFiles)) {
@@ -204,14 +233,14 @@ export function init(): void {
 
 /** Regenerates the Rust ABI, C++ methods, and TypeScript wrappers from the current Spec, preserving Rust handler bodies. */
 export function generate(): void {
-  const { root, moduleName } = packageRoot();
-  const rustPath = path.join(root, rustDirectory);
+  const { root, manifest, moduleName } = packageRoot();
+  const rustPath = resolveRustRoot(root, manifest);
   if (!fs.existsSync(path.join(rustPath, 'Cargo.toml'))) {
     throw new Error('Rust is not initialized. Run `npx react-native-rust init` first.');
   }
   const nativeSpecPath = path.join(root, 'src', `Native${moduleName}.ts`);
   const methods = parseSpec(fs.readFileSync(nativeSpecPath, 'utf8'), path.relative(root, nativeSpecPath));
-  const updates = renderProjectBindings(root, moduleName, methods, false, readCrateName(rustPath));
+  const updates = renderProjectBindings(root, moduleName, methods, false, readCrateName(rustPath), rustPath);
   for (const [filePath, fileContents] of updates) {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, fileContents);
@@ -221,8 +250,8 @@ export function generate(): void {
 
 /** Checks that the Rust toolchain, and optionally the iOS, Android, or web toolchain, are available. Sets `process.exitCode` on failure. */
 export function doctor(target: 'ios' | 'android' | 'web' | undefined): void {
-  const { root } = packageRoot();
-  if (!fs.existsSync(path.join(root, rustDirectory, 'Cargo.toml'))) {
+  const { root, manifest } = packageRoot();
+  if (!fs.existsSync(path.join(resolveRustRoot(root, manifest), 'Cargo.toml'))) {
     throw new Error('Rust is not initialized. Run `npx react-native-rust init` first.');
   }
   let failed = false;
@@ -260,13 +289,19 @@ export function doctor(target: 'ios' | 'android' | 'web' | undefined): void {
 /** Builds the Rust archive(s) for `ios` (an XCFramework) or `android` (per-ABI static archives). */
 export function build(platform: string | undefined): void {
   const { root, manifest, moduleName } = packageRoot();
-  const rustRoot = path.join(root, rustDirectory);
+  const rustRoot = resolveRustRoot(root, manifest);
   const manifestPath = path.join(rustRoot, 'Cargo.toml');
   if (!fs.existsSync(manifestPath)) {
     throw new Error('Rust is not initialized. Run `npx react-native-rust init` first.');
   }
   const crateName = readCrateName(rustRoot);
   const releasePath = (target: string) => path.join(rustRoot, 'target', target, 'release', `lib${crateName}.a`);
+  // Keeps the generated CMakeLists.txt's IMPORTED_LOCATION resolvable even if the symlink `init`
+  // created (see resolveOutsideReference) is missing, e.g. after a fresh clone where symlinks
+  // weren't preserved. A no-op in library mode, where rustRoot is inside root and no symlink is
+  // used. CMake/clang correctly follow this real symlink even when reached through the
+  // node_modules `file:` symlink app-local mode's generated package is installed as.
+  resolveOutsideReference(root, path.join(rustRoot, 'build', 'android'), 'rust-build-android');
 
   if (platform === 'ios') {
     for (const target of iosTargets) {
@@ -297,6 +332,20 @@ export function build(platform: string | undefined): void {
       '-output', frameworkPath,
     ], { inherit: true });
     if (!xcframework.ok) throw new Error(`Could not create the iOS XCFramework: ${xcframework.message}`);
+
+    // CocoaPods resolves `vendored_frameworks` at `pod install` time in a way that silently
+    // drops it if reached through a symlink (unlike CMake/clang, which follow the real symlink
+    // above just fine) — confirmed by a real Xcode build failing with unresolved Rust symbols.
+    // So in app-local mode, where the xcframework lives outside this generated package, `init`
+    // points the podspec at a plain subdirectory of the package instead of a symlink, and this
+    // copies the freshly built xcframework there (replacing whatever was there before) so it's a
+    // real, non-symlinked file CocoaPods can see correctly.
+    if (toPosixRelative(root, frameworkPath).startsWith('..')) {
+      const podFrameworkPath = path.join(root, 'rust-build-ios', `${moduleName}Rust.xcframework`);
+      fs.rmSync(path.dirname(podFrameworkPath), { recursive: true, force: true });
+      fs.mkdirSync(path.dirname(podFrameworkPath), { recursive: true });
+      fs.cpSync(frameworkPath, podFrameworkPath, { recursive: true });
+    }
     console.log(`Built ${path.relative(root, frameworkPath)} for ${manifest.name}.`);
     return;
   }
@@ -322,8 +371,97 @@ export function build(platform: string | undefined): void {
   if (platform === 'web') {
     const result = run('wasm-pack', ['build', '--target', 'web', '--out-dir', path.join('build', 'web', 'pkg')], { inherit: true, cwd: rustRoot });
     if (!result.ok) throw new Error(`Web build failed: ${result.message}`);
-    console.log(`Built rust/build/web/pkg for ${manifest.name}.`);
+    console.log(`Built ${toPosixRelative(root, path.join(rustRoot, 'build', 'web', 'pkg'))} for ${manifest.name}.`);
     return;
   }
   throw new Error('Choose a build target: ios, android, or web.');
+}
+
+/** A running dev watcher; call `stop()` to close its file watches before the process exits. */
+export interface WatchHandle {
+  stop: () => Promise<void>;
+}
+
+export interface WatchOptions {
+  /**
+   * Called after a Spec change triggers a successful `generate()`. App-local mode uses this to
+   * also re-run React Native's own Codegen, matching what the `generate` command already does.
+   */
+  onGenerated?: () => void;
+  log?: (message: string) => void;
+}
+
+/**
+ * Watches the Spec file and `rust/` sources for changes and reacts automatically: a Spec change
+ * re-runs `generate()` (preserving hand-written Rust handler bodies, as it always has); any
+ * change then runs an incremental `cargo build` for fast compiler feedback. Rust/C++ are native
+ * code — a running app cannot hot-swap them, so each cycle ends with a message telling the
+ * developer to rebuild and reinstall the platform target to see the change in a running app.
+ */
+export function watch(options: WatchOptions = {}): WatchHandle {
+  const { root, manifest, moduleName } = packageRoot();
+  const rustRoot = resolveRustRoot(root, manifest);
+  const cargoManifest = path.join(rustRoot, 'Cargo.toml');
+  if (!fs.existsSync(cargoManifest)) {
+    throw new Error('Rust is not initialized. Run `npx react-native-rust init` first.');
+  }
+  const log = options.log || console.log;
+  const target: WatchTarget = { rustRoot, specPath: path.join(root, 'src', `Native${moduleName}.ts`) };
+
+  let pendingKinds = new Set<ChangeKind>();
+
+  async function runWatchCycle(kinds: Set<ChangeKind>): Promise<void> {
+    if (kinds.has('spec')) {
+      log('[RN Rust] Spec changed. Regenerating native bindings...');
+      try {
+        generate();
+        options.onGenerated?.();
+      } catch (error) {
+        log('[RN Rust] Code generation failed.');
+        log('Possible causes:');
+        log('  - invalid Rust API');
+        log('  - unsupported parameter type');
+        log('  - unsupported return type');
+        log('  - invalid annotation/spec');
+        log(`  ${(error as Error).message}`);
+        log('[Rust] Waiting for changes...');
+        return;
+      }
+      log('[RN Rust] Native bindings updated.');
+    }
+
+    log('[Rust] Building...');
+    const start = Date.now();
+    const result = run('cargo', ['build', '--manifest-path', cargoManifest], { inherit: true });
+    const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+    if (!result.ok) {
+      log('[Rust] Build failed.');
+      log('[Rust] Waiting for changes...');
+      return;
+    }
+    log(`[Rust] Build completed in ${elapsed}s`);
+    log('[Rust] Native library updated.');
+    log('[RN Rust] Native code cannot hot-swap into a running app: run `npm run rust:build:ios` / `rust:build:android` / `rust:build:web` and reinstall (or refresh the browser tab, for react-native-web) to load this change.');
+    log('[Rust] Waiting for changes...');
+  }
+
+  const queue = new SingleFlightQueue(() => {
+    const kinds = pendingKinds;
+    pendingKinds = new Set();
+    return runWatchCycle(kinds);
+  });
+
+  const watcher = watchRustProject({
+    target,
+    log,
+    onChange: (kinds) => {
+      for (const kind of kinds) pendingKinds.add(kind);
+      queue.request();
+    },
+  });
+
+  log(`[Rust] Watching ${path.relative(process.cwd(), rustRoot) || 'rust'}/ and ${path.relative(process.cwd(), target.specPath)}`);
+  log('[Rust] Waiting for changes...');
+
+  return { stop: () => watcher.close() };
 }

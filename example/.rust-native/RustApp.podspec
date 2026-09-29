@@ -8,7 +8,6 @@ Pod::Spec.new do |s|
   s.source = { :git => "https://example.invalid" }
   s.platforms = { :ios => min_ios_version_supported }
   s.source_files = "cpp/**/*.{hpp,cpp,c,h}", "ios/**/*.{h,m,mm}", "ios/generated/*.{h,cpp,mm}"
-  s.vendored_frameworks = "rust/build/ios/RustAppRust.xcframework"
-  s.vendored_frameworks = "rust/build/ios/RustAppRust.xcframework"
+  s.vendored_frameworks = "rust-build-ios/RustAppRust.xcframework"
   install_modules_dependencies(s)
 end

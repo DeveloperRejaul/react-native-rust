@@ -9,6 +9,39 @@ import {
 import { renderCppMethods, renderRustExports, renderRustHandler, renderRustModuleList, renderRustWasmModule, renderWrappers } from './renderers';
 import { MethodInfo } from './types';
 
+/** Converts a path.relative() result to a forward-slash form suitable for #include/import strings on every OS. */
+export function toPosixRelative(from: string, to: string): string {
+  return path.relative(from, to).split(path.sep).join('/');
+}
+
+/**
+ * Resolves a reference to `targetDir` that stays correct even when this package is reached
+ * through an npm `file:` symlink in `node_modules` (as app-local mode's generated module always
+ * is) rather than its real location.
+ *
+ * A plain relative path works when `targetDir` is inside `root`'s own tree: the whole traversal
+ * then stays within this one package, whether accessed at its real path or through the
+ * node_modules symlink, so it never needs to "escape" and the ambiguity never arises.
+ *
+ * It breaks when `targetDir` is OUTSIDE `root` (app-local mode points the Rust crate at the
+ * app's own root, not at the generated module package): CMake, clang, and CocoaPods resolve `..`
+ * segments lexically against whatever path they were told this package lives at, so a `..` meant
+ * to reach the app root instead walks up through `node_modules/<name>/`, landing in the wrong
+ * place. A real filesystem symlink placed at this package's own root sidesteps that: the OS
+ * resolves it from its own physical parent directory regardless of how the caller reached it, so
+ * every *other* reference to it from elsewhere in this package can then use an ordinary,
+ * same-package-relative path (safe, per the paragraph above) instead of crossing the boundary
+ * again. Returns `targetDir` unchanged, or the created symlink's path, for the caller to compute
+ * a relative reference from.
+ */
+export function resolveOutsideReference(root: string, targetDir: string, linkName: string): string {
+  if (!toPosixRelative(root, targetDir).startsWith('..')) return targetDir;
+  const linkPath = path.join(root, linkName);
+  fs.rmSync(linkPath, { force: true });
+  fs.symlinkSync(toPosixRelative(root, targetDir), linkPath);
+  return linkPath;
+}
+
 /** Replaces the text between a `[start, end]` marker pair, or returns `null` if the markers are missing. */
 export function replaceMarkedRegion(source: string, startMarker: string, endMarker: string, generated: string): string | null {
   const start = source.indexOf(startMarker);
@@ -71,12 +104,12 @@ export function updateCppFile(
   generated: string,
   templateMethod: boolean,
   methodNeedle: string,
-  includeRustHeader = false,
+  rustHeaderPath?: string,
 ): string {
   let updated = source;
-  if (includeRustHeader && !updated.includes('../rust/include/rust_api.h')) {
+  if (rustHeaderPath && !updated.includes(`#include "${rustHeaderPath}"`)) {
     if (!updated.includes('#pragma once')) throw new Error('Unsupported C++ module header template.');
-    updated = updated.replace('#pragma once', '#pragma once\n\n#include "../rust/include/rust_api.h"');
+    updated = updated.replace('#pragma once', `#pragma once\n\n#include "${rustHeaderPath}"`);
   }
   const marked = replaceMarkedRegion(updated, markers[0], markers[1], generated);
   if (marked !== null) return marked;
@@ -125,10 +158,13 @@ export function validateExistingHandler(filePath: string, method: MethodInfo): v
  * Renders every generated file for a library or app-local module: the C++ TurboModule
  * methods, the Rust FFI and WASM exports and handler stubs, and the TypeScript wrappers.
  * `crateName` is the Rust crate's package name (from `rust/Cargo.toml`), used to import the
- * `wasm-pack --target web` output from the generated web wrapper. Returns a map of absolute
- * file path to new contents; the caller is responsible for writing them.
+ * `wasm-pack --target web` output from the generated web wrapper. `rustRoot` is where the Rust
+ * crate itself lives; it defaults to `<root>/rust` (library mode) but app-local mode points it
+ * outside `root` (e.g. the app's own root), so every generated reference to it (the C++ header
+ * include, the web wrapper's wasm-pkg import) is computed as a relative path instead of assumed.
+ * Returns a map of absolute file path to new contents; the caller is responsible for writing them.
  */
-export function renderProjectBindings(root: string, moduleName: string, methods: MethodInfo[], initialize: boolean, crateName: string): Map<string, string> {
+export function renderProjectBindings(root: string, moduleName: string, methods: MethodInfo[], initialize: boolean, crateName: string, rustRoot: string = path.join(root, 'rust')): Map<string, string> {
   const headerPath = path.join(root, 'cpp', `${moduleName}Impl.h`);
   const sourcePath = path.join(root, 'cpp', `${moduleName}Impl.cpp`);
   const header = fs.readFileSync(headerPath, 'utf8');
@@ -141,7 +177,9 @@ export function renderProjectBindings(root: string, moduleName: string, methods:
   const cppSource = cpp.source.replace(/^#include .+\n/gm, '');
   const headerTemplateMethod = 'double multiply(jsi::Runtime& rt, double a, double b);';
   const sourceTemplateMethod = `${moduleName}Impl::multiply(`;
-  const updatedHeader = updateCppFile(header, [HEADER_START, HEADER_END], cpp.header, initialize, headerTemplateMethod, true);
+  const rustIncludeTarget = resolveOutsideReference(root, path.join(rustRoot, 'include'), 'rust-include');
+  const rustHeaderPath = `${toPosixRelative(path.join(root, 'cpp'), rustIncludeTarget)}/rust_api.h`;
+  const updatedHeader = updateCppFile(header, [HEADER_START, HEADER_END], cpp.header, initialize, headerTemplateMethod, rustHeaderPath);
   let updatedSource = updateCppFile(source, [SOURCE_START, SOURCE_END], cppSource, initialize, sourceTemplateMethod);
   if (generatedIncludes.length > 0) {
     const namespaceIndex = updatedSource.indexOf('\nnamespace facebook::react {');
@@ -153,7 +191,7 @@ export function renderProjectBindings(root: string, moduleName: string, methods:
     }
   }
 
-  const rustDirectory = path.join(root, 'rust', 'src');
+  const rustDirectory = path.join(rustRoot, 'src');
   const moduleList = renderRustModuleList(methods);
   const updates = new Map<string, string>([
     [headerPath, updatedHeader],
@@ -168,7 +206,9 @@ export function renderProjectBindings(root: string, moduleName: string, methods:
     else updates.set(handlerPath, renderRustHandler(method));
   }
 
-  const wrappers = renderWrappers(methods, moduleName, crateName);
+  const wasmPkgTarget = resolveOutsideReference(root, path.join(rustRoot, 'build', 'web', 'pkg'), 'rust-build-web-pkg');
+  const wasmPkgPath = toPosixRelative(path.join(root, 'src'), wasmPkgTarget);
+  const wrappers = renderWrappers(methods, moduleName, crateName, wasmPkgPath);
   const generatedModulePath = path.join(root, 'src', 'rust-generated');
   updates.set(`${generatedModulePath}.tsx`, wrappers.web);
   updates.set(`${generatedModulePath}.native.tsx`, wrappers.native);

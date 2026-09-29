@@ -13,6 +13,11 @@ export interface PackageManifest {
   scripts?: Record<string, string>;
   files?: string[];
   codegenConfig?: Record<string, unknown>;
+  /** Optional react-native-rust project configuration. */
+  reactNativeRust?: {
+    /** Where the Rust crate lives, relative to this manifest's directory. Defaults to `rust`. */
+    rustDir?: string;
+  };
   [key: string]: unknown;
 }
 

@@ -1,6 +1,6 @@
 declare namespace CodegenTypes { type UnsafeObject = object; }
 
-import wasmInit, * as rnrsWasm from '../rust/build/web/pkg/rust_app_native_module.js';
+import wasmInit, * as rnrsWasm from '../rust-build-web-pkg/rust_app_native_module.js';
 
 let rnrsWasmReady = false;
 let rnrsWasmInit: Promise<void> | null = null;

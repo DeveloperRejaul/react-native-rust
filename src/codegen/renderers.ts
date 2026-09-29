@@ -390,7 +390,7 @@ export function renderCppMethods(methods: MethodInfo[], moduleName: string): { h
  * output from `rust/build/web/pkg/` and must be initialized once via `initRustWeb()` before use,
  * since loading a `.wasm` file is asynchronous even though the generated calls are not.
  */
-export function renderWrappers(methods: MethodInfo[], moduleName: string, crateName: string): { native: string; web: string } {
+export function renderWrappers(methods: MethodInfo[], moduleName: string, crateName: string, wasmPkgPath: string = '../rust/build/web/pkg'): { native: string; web: string } {
   const nativeLines = [
     `import ${moduleName} from './Native${moduleName}';`,
     '',
@@ -401,7 +401,7 @@ export function renderWrappers(methods: MethodInfo[], moduleName: string, crateN
     '',
   ];
   const webLines = [
-    `import wasmInit, * as rnrsWasm from '../rust/build/web/pkg/${crateName}.js';`,
+    `import wasmInit, * as rnrsWasm from '${wasmPkgPath}/${crateName}.js';`,
     '',
     'let rnrsWasmReady = false;',
     'let rnrsWasmInit: Promise<void> | null = null;',

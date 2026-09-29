@@ -11,10 +11,7 @@
     "android/",
     "ios/",
     "*.podspec",
-    "react-native.config.js",
-    "rust/",
-    "rust/build/",
-    "rust/include/"
+    "react-native.config.js"
   ],
   "peerDependencies": {
     "react": "*",
@@ -33,11 +30,15 @@
     },
     "includesGeneratedCode": true
   },
+  "reactNativeRust": {
+    "rustDir": "../rust"
+  },
   "devDependencies": {},
   "scripts": {
-    "rust:test": "cargo test --manifest-path rust/Cargo.toml",
+    "rust:test": "cargo test --manifest-path ../rust/Cargo.toml",
     "rust:generate": "react-native-rust generate",
     "rust:build:ios": "react-native-rust build ios",
-    "rust:build:android": "react-native-rust build android"
+    "rust:build:android": "react-native-rust build android",
+    "rust:build:web": "react-native-rust build web"
   }
 }

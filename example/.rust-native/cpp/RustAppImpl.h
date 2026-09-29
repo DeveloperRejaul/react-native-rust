@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../rust/include/rust_api.h"
+#include "../rust-include/rust_api.h"
 
 #include <RustAppSpecJSI.h>
 

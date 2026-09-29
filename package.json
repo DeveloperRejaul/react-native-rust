@@ -7,6 +7,7 @@
   },
   "files": [
     "dist/",
+    "metro.js",
     "README.md",
     "LICENSE",
     "CONTRIBUTING.md",
@@ -47,6 +48,7 @@
   },
   "homepage": "https://github.com/DeveloperRejaul/react-native-rust#readme",
   "dependencies": {
+    "chokidar": "^3.6.0",
     "typescript": "^5.9.3"
   },
   "devDependencies": {

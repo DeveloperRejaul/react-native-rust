@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const { afterEach, test } = require('node:test');
 const { build } = require('../dist/react-native-rust-lib.js');
 
@@ -89,6 +89,35 @@ afterEach(() => {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+/** Polls `getText()` until `pattern` matches, or rejects after `timeoutMs` (the watch tests' output is asynchronous). */
+function waitForOutput(getText, pattern, timeoutMs = 8000) {
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+    const check = () => {
+      const text = getText();
+      if (pattern.test(text)) return resolve(text);
+      if (Date.now() - start > timeoutMs) return reject(new Error(`Timed out waiting for ${pattern} in output:\n${text}`));
+      return setTimeout(check, 25);
+    };
+    check();
+  });
+}
+
+/** Writes a fake `cargo` executable that just appends a line to `markerPath`, and returns its bin directory. */
+function createFakeCargo(directory, markerPath) {
+  const binDirectory = path.join(directory, '.fake-bin');
+  fs.mkdirSync(binDirectory);
+  const fakeCargoPath = path.join(binDirectory, 'cargo');
+  fs.writeFileSync(fakeCargoPath, [
+    '#!/usr/bin/env node',
+    "const fs = require('node:fs');",
+    `fs.appendFileSync(${JSON.stringify(markerPath)}, 'build\\n');`,
+    '',
+  ].join('\n'));
+  fs.chmodSync(fakeCargoPath, 0o755);
+  return binDirectory;
+}
 
 test('help prints supported commands without requiring a React Native project', () => {
   const result = runCli(os.tmpdir(), '--help');
@@ -182,20 +211,40 @@ test('init --app creates an app-local Rust TurboModule and app commands regenera
   const result = runCli(directory, 'init', '--app');
   assert.equal(result.status, 0, result.stderr);
 
-  const moduleRoot = path.join(directory, 'native/rust-module');
+  const moduleRoot = path.join(directory, '.rust-native');
   const appManifest = JSON.parse(fs.readFileSync(path.join(directory, 'package.json'), 'utf8'));
   const moduleManifest = JSON.parse(fs.readFileSync(path.join(moduleRoot, 'package.json'), 'utf8'));
-  assert.equal(appManifest.dependencies['rust-app-native-module'], 'file:./native/rust-module');
+  assert.equal(appManifest.dependencies['rust-app-native-module'], 'file:./.rust-native');
   assert.equal(appManifest.scripts['rust:build:android'], 'react-native-rust build android');
+  assert.equal(appManifest.scripts['rust:test'], 'cargo test --manifest-path rust/Cargo.toml');
   assert.equal(moduleManifest.codegenConfig.name, 'RustAppSpec');
-  assert.match(fs.readFileSync(path.join(moduleRoot, 'rust/src/api/multiply.rs'), 'utf8'), /pub fn multiply\(a: f64, b: f64\)/);
+  assert.equal(moduleManifest.reactNativeRust.rustDir, '../rust');
+  // The Rust crate itself lives at the app's own root, not inside the generated module package.
+  assert.match(fs.readFileSync(path.join(directory, 'rust/src/api/multiply.rs'), 'utf8'), /pub fn multiply\(a: f64, b: f64\)/);
+  assert.equal(fs.existsSync(path.join(moduleRoot, 'rust')), false);
+  // References to the (outside-root) Rust crate go through a real symlink at this package's own
+  // root, not a lexical `../../` path, so they still resolve once this package is reached via an
+  // npm `file:` symlink in node_modules (see resolveOutsideReference's doc comment for why).
+  assert.match(fs.readFileSync(path.join(moduleRoot, 'cpp/RustAppImpl.h'), 'utf8'), /#include "\.\.\/rust-include\/rust_api\.h"/);
   assert.match(fs.readFileSync(path.join(moduleRoot, 'cpp/RustAppImpl.cpp'), 'utf8'), /rnrs_multiply/);
+  assert.equal(fs.readlinkSync(path.join(moduleRoot, 'rust-include')), '../rust/include');
+  assert.equal(fs.readlinkSync(path.join(moduleRoot, 'rust-build-android')), '../rust/build/android');
   const androidCmake = fs.readFileSync(path.join(moduleRoot, 'android/CMakeLists.txt'), 'utf8');
   assert.match(androidCmake, /CXX_STANDARD 20/);
   assert.match(androidCmake, /react_codegen_RustAppSpec/);
+  assert.match(androidCmake, /\.\.\/rust-build-android/);
+  // Unlike the CMake reference, CocoaPods silently drops `vendored_frameworks` when it's reached
+  // through a symlink, so this names a plain subdirectory instead — `build ios` populates it with
+  // a real copy of the built xcframework rather than `init` symlinking to it.
+  const podspec = fs.readFileSync(path.join(moduleRoot, 'RustApp.podspec'), 'utf8');
+  assert.match(podspec, /s\.vendored_frameworks = "rust-build-ios\/RustAppRust\.xcframework"/);
+  assert.equal(fs.existsSync(path.join(moduleRoot, 'rust-build-ios')), false);
   assert.equal(fs.existsSync(path.join(moduleRoot, 'android/generated/jni/CMakeLists.txt')), true);
   assert.equal(fs.existsSync(path.join(moduleRoot, 'ios/generated/ReactCodegen/RustAppSpecJSI.h')), true);
   assert.equal(fs.existsSync(path.join(moduleRoot, 'codegen-ran')), true);
+  const rootGitignore = fs.readFileSync(path.join(directory, '.gitignore'), 'utf8');
+  assert.match(rootGitignore, /rust\/target\//);
+  assert.match(rootGitignore, /rust\/build\//);
 
   const regenerate = runCli(directory, 'generate');
   assert.equal(regenerate.status, 0, regenerate.stderr);
@@ -408,4 +457,97 @@ test('init detects script conflicts before creating the Rust crate', () => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /already defines a rust:test or rust:generate script/);
   assert.equal(fs.existsSync(path.join(directory, 'rust')), false);
+});
+
+test('watch rebuilds on Rust changes, regenerates only on Spec changes, debounces rapid saves, and exits cleanly on SIGINT', async () => {
+  const directory = createLibrary();
+  assert.equal(runCli(directory, 'init').status, 0);
+
+  const markerPath = path.join(directory, 'cargo-calls.log');
+  fs.writeFileSync(markerPath, '');
+  const fakeBin = createFakeCargo(directory, markerPath);
+
+  const child = spawn(process.execPath, [cliPath, 'watch'], {
+    cwd: directory,
+    env: { ...process.env, PATH: `${fakeBin}${path.delimiter}${process.env.PATH}` },
+  });
+  let output = '';
+  child.stdout.on('data', (chunk) => { output += chunk; });
+  child.stderr.on('data', (chunk) => { output += chunk; });
+  const exited = new Promise((resolve) => child.on('exit', (code) => resolve(code)));
+
+  try {
+    await waitForOutput(() => output, /\[Rust\] Watching/);
+
+    // Implementation-only change: should trigger exactly one rebuild, not regeneration. The
+    // second, rapid save (well inside the debounce window) must coalesce into that same build.
+    fs.writeFileSync(path.join(directory, 'rust/src/api/multiply.rs'), 'pub fn multiply(a: f64, b: f64) -> f64 {\n    a * b * 2.0\n}\n');
+    await new Promise((resolve) => { setTimeout(resolve, 50); });
+    fs.writeFileSync(path.join(directory, 'rust/src/api/multiply.rs'), 'pub fn multiply(a: f64, b: f64) -> f64 {\n    a * b * 3.0\n}\n');
+    await waitForOutput(() => output, /\[Rust\] Build completed/);
+    const callsAfterImplementationChange = fs.readFileSync(markerPath, 'utf8').trim().split('\n').filter(Boolean).length;
+    assert.equal(callsAfterImplementationChange, 1, 'rapid saves inside the debounce window should coalesce into one build');
+    assert.doesNotMatch(output, /Spec changed/, 'an implementation-only change must not regenerate native bindings');
+
+    // Spec change: should regenerate (a new handler stub appears) and then rebuild.
+    output = '';
+    const specPath = path.join(directory, 'src/NativeRustDemo.ts');
+    fs.writeFileSync(specPath, fs.readFileSync(specPath, 'utf8').replace(
+      '  multiply(a: number, b: number): number;',
+      '  multiply(a: number, b: number): number;\n  add(a: number, b: number): number;',
+    ));
+    await waitForOutput(() => output, /\[Rust\] Build completed/);
+    assert.match(output, /Spec changed/);
+    assert.equal(fs.existsSync(path.join(directory, 'rust/src/api/add.rs')), true);
+    const callsAfterSpecChange = fs.readFileSync(markerPath, 'utf8').trim().split('\n').filter(Boolean).length;
+    assert.equal(callsAfterSpecChange, 2, 'a Spec change should also trigger exactly one rebuild');
+  } finally {
+    child.kill('SIGINT');
+  }
+  assert.equal(await exited, 0, 'the watcher should shut down cleanly (exit code 0) on SIGINT');
+});
+
+test('watch reports a failed build without crashing and recovers once the Rust code is fixed', async () => {
+  const directory = createLibrary();
+  assert.equal(runCli(directory, 'init').status, 0);
+
+  const markerPath = path.join(directory, 'cargo-calls.log');
+  fs.writeFileSync(markerPath, '');
+  const binDirectory = path.join(directory, '.fake-bin');
+  fs.mkdirSync(binDirectory);
+  const fakeCargoPath = path.join(binDirectory, 'cargo');
+  fs.writeFileSync(fakeCargoPath, [
+    '#!/usr/bin/env node',
+    "const fs = require('node:fs');",
+    `const marker = ${JSON.stringify(markerPath)};`,
+    "const calls = fs.readFileSync(marker, 'utf8').trim().split('\\n').filter(Boolean).length;",
+    "fs.appendFileSync(marker, 'build\\n');",
+    // The first build fails; every build after that succeeds, simulating a fix.
+    'if (calls === 0) process.exit(1);',
+    '',
+  ].join('\n'));
+  fs.chmodSync(fakeCargoPath, 0o755);
+
+  const child = spawn(process.execPath, [cliPath, 'watch'], {
+    cwd: directory,
+    env: { ...process.env, PATH: `${binDirectory}${path.delimiter}${process.env.PATH}` },
+  });
+  let output = '';
+  child.stdout.on('data', (chunk) => { output += chunk; });
+  child.stderr.on('data', (chunk) => { output += chunk; });
+  const exited = new Promise((resolve) => child.on('exit', (code) => resolve(code)));
+
+  try {
+    await waitForOutput(() => output, /\[Rust\] Watching/);
+    fs.writeFileSync(path.join(directory, 'rust/src/api/multiply.rs'), 'pub fn multiply(a: f64, b: f64) -> f64 {\n    a * b * 2.0\n}\n');
+    await waitForOutput(() => output, /\[Rust\] Build failed\./);
+    assert.match(output, /\[Rust\] Waiting for changes/);
+
+    output = '';
+    fs.writeFileSync(path.join(directory, 'rust/src/api/multiply.rs'), 'pub fn multiply(a: f64, b: f64) -> f64 {\n    a * b * 4.0\n}\n');
+    await waitForOutput(() => output, /\[Rust\] Build completed/, 8000);
+  } finally {
+    child.kill('SIGINT');
+  }
+  assert.equal(await exited, 0);
 });
